@@ -120,24 +120,23 @@ function updateIndexMax(node) {
 function handleGrowOnConnection(node) {
     if (!node.inputs) return;
     
-    var allConnected = true;
-    var dataSlotsCount = 0;
+    var dataSlots = [];
     for (var i = 0; i < node.inputs.length; i++) {
         var inp = node.inputs[i];
         if (inp && inp.name !== "index") {
-            dataSlotsCount++;
-            if (inp.link == null) {
-                allConnected = false;
-            }
+            dataSlots.push(inp);
         }
     }
     
-    if (allConnected) {
-        if (dataSlotsCount >= 60) {
+    if (dataSlots.length === 0) return;
+    
+    var lastSlot = dataSlots[dataSlots.length - 1];
+    if (lastSlot && lastSlot.link != null) {
+        if (dataSlots.length >= 60) {
             console.warn("[AnySwitch311] Maximum inputs reached (60)");
             return;
         }
-        node.addInput("value" + dataSlotsCount, "*");
+        node.addInput("value" + dataSlots.length, "*");
         alignInputNames(node);
     }
 }
@@ -194,6 +193,7 @@ function cleanupTrailingEmptySlots(node) {
 function setup311(node) {
     if (node._sw311) return;
     node._sw311 = true;
+    node._dirty_slots = false;
     console.log("[311] setup311 on node", node.id);
 
     // INMEDIATE Cleanup for UI interactive node creation:
@@ -238,15 +238,18 @@ function setup311(node) {
         if (origCC) origCC.apply(this, arguments);
         
         if (type === 1) { // 1 = Input
-            if (connected) {
-                handleGrowOnConnection(this);
-            } else {
-                cleanupTrailingEmptySlots(this);
-            }
-            updateIndexMax(this);
-            
             var self = this;
             setTimeout(function () {
+                if (connected) {
+                    handleGrowOnConnection(self);
+                } else {
+                    var canvas = (typeof app !== "undefined" && app.canvas) || self.graph?.canvas;
+                    if (canvas && canvas.connecting_node != null) {
+                        self._dirty_slots = true;
+                    } else {
+                        cleanupTrailingEmptySlots(self);
+                    }
+                }
                 alignInputNames(self);
                 updateIndexMax(self);
                 self.setDirtyCanvas(true, true);
@@ -259,6 +262,14 @@ function setup311(node) {
     node.onDrawForeground = function (ctx) {
         try {
             if (origDraw) origDraw.call(this, ctx);
+
+            var canvas = (typeof app !== "undefined" && app.canvas) || this.graph?.canvas;
+            if (this._dirty_slots && (!canvas || !canvas.connecting_node)) {
+                this._dirty_slots = false;
+                cleanupTrailingEmptySlots(this);
+                updateIndexMax(this);
+                this.setDirtyCanvas(true, true);
+            }
 
             var iw = findIndexWidget(this);
             if (!iw || !this.inputs) return;

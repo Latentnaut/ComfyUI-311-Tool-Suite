@@ -257,6 +257,36 @@ function setup311(node) {
         }
     };
 
+    // ── Pre-draw slots label hide ──
+    var origDrawBg = node.onDrawBackground;
+    node.onDrawBackground = function (ctx) {
+        if (origDrawBg) origDrawBg.apply(this, arguments);
+        
+        try {
+            var iw = findIndexWidget(this);
+            if (!iw || !this.inputs) return;
+            var selIdx = iw.value;
+            
+            for (var i = 0; i < this.inputs.length; i++) {
+                var inp = this.inputs[i];
+                if (!inp || !inp.name || inp.name === "index") continue;
+                
+                var match = inp.name.match(/(values\.)?value(\d+)$/);
+                if (!match) continue;
+                
+                var idx = parseInt(match[2], 10);
+                if (idx === selIdx) {
+                    var labels = getLabels(this);
+                    var displayedName = labels[i] || inp.name;
+                    inp._originalLabelBackup = inp.label !== " " ? inp.label : (displayedName || inp.name);
+                    inp.label = " ";
+                }
+            }
+        } catch (e) {
+            console.error("[AnySwitch311] drawBackground error:", e);
+        }
+    };
+
     // ── Draw (Implicit renaming detection and passive rendering) ──
     var origDraw = node.onDrawForeground;
     node.onDrawForeground = function (ctx) {
@@ -289,6 +319,12 @@ function setup311(node) {
                 var idx = parseInt(match[2], 10);
                 var cleanName = inp.name;
 
+                // Restore original label if it was backed up
+                if (idx === selIdx && inp._originalLabelBackup !== undefined) {
+                    inp.label = inp._originalLabelBackup;
+                    delete inp._originalLabelBackup;
+                }
+
                 // ── Step 1: Detect user rename from context menu prompt ──
                 if (inp._311label !== undefined &&
                     inp.label !== undefined &&
@@ -303,15 +339,12 @@ function setup311(node) {
                     }
                 }
 
-
-
                 // ── Step 2: Determine display name ──
                 var displayedName = labels[i] || cleanName;
 
                 // ── Step 3: Render ──
                 if (idx === selIdx) {
-                    inp.label = " ";
-                    inp._311label = " ";
+                    inp._311label = displayedName;
 
                     var connPos = this.getConnectionPos(true, i);
                     if (connPos) {

@@ -3,3 +3,6 @@ __pycache__/
 *.pyo
 *.pyd
 .DS_Store
+
+# Agent Mind (Context, Memory and Skills)
+.agent/

@@ -166,5 +166,35 @@ try:
 
         return web.json_response({"status": "error", "error": error})
 
+    @PromptServer.instance.routes.post("/file_reader_311/save")
+    async def _file_reader_311_save_api(request):
+        try:
+            data = await request.json()
+            path = data.get("path", "").strip()
+            content = data.get("content", "")
+
+            if not path:
+                return web.json_response({"status": "error", "error": "No path provided"})
+
+            path = path.strip().strip('"').strip("'")
+
+            if os.path.isdir(path):
+                return web.json_response({"status": "error", "error": "Target path is a directory, not a file"})
+
+            # Ensure the directory exists
+            parent = os.path.dirname(path)
+            if parent and not os.path.exists(parent):
+                os.makedirs(parent, exist_ok=True)
+
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            logger.info(f"[FileReader311] ✓ Saved: {path} ({len(content):,} chars)")
+            return web.json_response({"status": "success"})
+
+        except Exception as e:
+            logger.error(f"[FileReader311] Save error: {e}")
+            return web.json_response({"status": "error", "error": str(e)})
+
 except Exception:
     logger.warning("[FileReader311] Could not register API route")

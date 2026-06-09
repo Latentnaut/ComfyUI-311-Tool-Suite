@@ -82,6 +82,7 @@ const CSS = `
 }
 .fr-btn:hover { background: #3a3a3a; color: #eee; border-color: #555; }
 .fr-btn.fr-copied { background: #1a3a1a; color: #4ade80; border-color: #2a5a2a; }
+.fr-btn.fr-active { background: #1a2a3a; color: #60a5fa; border-color: #2a4a5a; }
 .fr-btn svg { pointer-events: none; }
 
 @keyframes fr-spin {
@@ -347,6 +348,31 @@ function gw(node, name) {
 
 function initProps(node) {
   if (!node.properties) node.properties = {};
+
+  // Sync from widgets to properties if properties are empty but widgets have values (e.g. on new machine load)
+  const getWVal = (name) => {
+    const w = node.widgets?.find((w) => w.name === name);
+    if (w && w.value !== undefined && w.value !== null) return w.value;
+    const idx = node.widgets?.findIndex((w) => w.name === name);
+    if (idx >= 0 && node.widgets_values?.[idx] !== undefined && node.widgets_values[idx] !== null)
+      return node.widgets_values[idx];
+    return "";
+  };
+
+  const widgetCachedContent = getWVal("_cached_content");
+  if (!node.properties.fr_cache_content && widgetCachedContent) {
+    node.properties.fr_cache_content = widgetCachedContent;
+    node.properties.fr_cache_name = getWVal("_cached_file_name") || "cached";
+    if (node.properties.fr_cache_name) {
+      node.properties.fr_cache_ext = "." + node.properties.fr_cache_name.split(".").pop();
+    }
+  }
+
+  const widgetEditorContent = getWVal("_editor_content");
+  if (!node.properties.fr_editor && widgetEditorContent) {
+    node.properties.fr_editor = widgetEditorContent;
+  }
+
   if (!("fr_cache_content" in node.properties)) node.properties.fr_cache_content = "";
   if (!("fr_cache_name"    in node.properties)) node.properties.fr_cache_name    = "";
   if (!("fr_cache_ext"     in node.properties)) node.properties.fr_cache_ext     = "";
@@ -555,6 +581,8 @@ function renderContent(text, ext) {
 const ICON_REFRESH = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>`;
 const ICON_COPY    = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 const ICON_CHECK   = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+const ICON_EDIT    = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`;
+const ICON_SAVE    = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`;
 
 /* ─── Badge Creator ───────────────────────────────────────── */
 
@@ -675,16 +703,20 @@ function showContent(node, content, ext, status, fname, error) {
     const edContent = getEditor(node);
     if (edContent && edContent.trim()) {
       // Recover from editor content
+      el.mode = "edit";
       showContent(node, edContent, c.ext, "edited", c.name || "recovered", error);
       return;
     }
     if (c.content && c.content.trim()) {
       // Recover from cache
+      el.mode = "view";
       showContent(node, c.content, c.ext, "cached", c.name || "recovered", error);
       return;
     }
     el.viewer.style.display = "block";
     el.editor.style.display = "none";
+    if (el.editBtn) el.editBtn.classList.remove("fr-active");
+    if (el.saveBtn) el.saveBtn.style.display = "none";
     el.viewer.innerHTML = `
       <div class="fr-error-box">
         <span class="fr-error-icon">⚠️</span>
@@ -694,30 +726,36 @@ function showContent(node, content, ext, status, fname, error) {
     return;
   }
 
-  if (status === "edited") {
-    // User-written override — show in raw textarea
+  // Update editor value if we receive new live/cached content from backend/API
+  if (status !== "edited" && status !== "error") {
+    el.editor.value = el.content;
+  }
+
+  const isEditMode = el.mode === "edit";
+  if (isEditMode) {
     el.viewer.style.display = "none";
     el.editor.style.display = "block";
-    el.editor.value = content || "";
+    if (el.editBtn) el.editBtn.classList.add("fr-active");
+    if (el.saveBtn) el.saveBtn.style.display = "flex";
     if (!el.search || document.activeElement !== el.search.input) el.editor.focus();
-    if (el.search && el.search.query) setTimeout(() => performSearch(node, el.search.query), 10);
-    return;
+  } else {
+    el.viewer.style.display = "block";
+    el.editor.style.display = "none";
+    if (el.editBtn) el.editBtn.classList.remove("fr-active");
+    if (el.saveBtn) el.saveBtn.style.display = "none";
+
+    let warningBanner = "";
+    if (status === "cached" && error) {
+      warningBanner = `<div style="background:#3a2a1a;border:1px solid #5a4a2a;border-radius:4px;padding:6px 10px;margin-bottom:10px;font-size:11px;color:#fbbf24;display:flex;align-items:center;gap:6px;">
+        <span style="font-size:14px;">⚠️</span>
+        <span>File not found — showing cached copy. Update the path to reconnect.</span>
+      </div>`;
+    }
+
+    const textToRender = status === "edited" ? (getEditor(node) || el.content) : el.content;
+    el.viewer.innerHTML = warningBanner + renderContent(textToRender, ext);
+    el.viewer.scrollTop = 0;
   }
-
-  // live or cached — show rendered in viewer
-  el.viewer.style.display = "block";
-  el.editor.style.display = "none";
-
-  let warningBanner = "";
-  if (status === "cached" && error) {
-    warningBanner = `<div style="background:#3a2a1a;border:1px solid #5a4a2a;border-radius:4px;padding:6px 10px;margin-bottom:10px;font-size:11px;color:#fbbf24;display:flex;align-items:center;gap:6px;">
-      <span style="font-size:14px;">⚠️</span>
-      <span>File not found — showing cached copy. Update the path to reconnect.</span>
-    </div>`;
-  }
-
-  el.viewer.innerHTML = warningBanner + renderContent(content, ext);
-  el.viewer.scrollTop = 0;
   if (el.search && el.search.query) setTimeout(() => performSearch(node, el.search.query), 10);
 }
 
@@ -809,6 +847,84 @@ function copyContent(node) {
   });
 }
 
+/* ─── Toggle Edit/View Mode ────────────────────────────────── */
+
+function toggleEditMode(node) {
+  const el = node._fr;
+  if (!el) return;
+
+  if (el.mode === "edit") {
+    el.mode = "view";
+    const currentVal = el.editor.value;
+    const c = getCache(node);
+    if (currentVal !== c.content) {
+      setEditor(node, currentVal);
+      el.status = "edited";
+    } else {
+      setEditor(node, "");
+      if (el.status === "edited") {
+        el.status = "live";
+      }
+    }
+  } else {
+    el.mode = "edit";
+    if (!el.editor.value) {
+      const edContent = getEditor(node);
+      el.editor.value = edContent || el.content || "";
+    }
+  }
+
+  syncHiddenWidgets(node);
+  showContent(node, el.content, el.fileExt, el.status, el.fileName, "");
+}
+
+/* ─── Save Content to Disk ─────────────────────────────────── */
+
+async function saveToFile(node) {
+  const el = node._fr;
+  if (!el) return;
+
+  const path = gw(node, "file_path");
+  if (!path) {
+    alert("Cannot save: No file path specified.");
+    return;
+  }
+
+  const content = el.editor.value;
+  
+  el.saveBtn.classList.add("fr-refreshing");
+  try {
+    const resp = await fetch("/file_reader_311/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, content }),
+    });
+    const data = await resp.json();
+
+    if (data.status === "success") {
+      setEditor(node, ""); 
+      const fname = el.fileName || path.split(/[/\\]/).pop();
+      setCache(node, content, fname, el.fileExt);
+      syncHiddenWidgets(node);
+      
+      el.mode = "view";
+      showContent(node, content, el.fileExt, "live", fname, "");
+      
+      el.saveBtn.innerHTML = ICON_CHECK;
+      setTimeout(() => {
+        el.saveBtn.innerHTML = ICON_SAVE;
+      }, 1500);
+    } else {
+      alert(`Save failed: ${data.error}`);
+    }
+  } catch (err) {
+    console.error("[FileReader] Save failed:", err);
+    alert(`Save failed: ${err}`);
+  } finally {
+    el.saveBtn.classList.remove("fr-refreshing");
+  }
+}
+
 /* ─── Restore Cache on Workflow Load ──────────────────────── */
 
 function restoreCache(node) {
@@ -838,7 +954,18 @@ function setup(node) {
   node.color   = "#252525";
   node.bgcolor = "#1a1a1a";
 
-  node._fr = { content: "", status: "idle", fileName: "", fileExt: "" };
+  // Hide internal cached/editor content widgets from UI to keep the node compact
+  const hiddenWidgetNames = ["_cached_content", "_cached_file_name", "_editor_content"];
+  if (node.widgets) {
+    for (const w of node.widgets) {
+      if (hiddenWidgetNames.includes(w.name)) {
+        w.computeSize = () => [0, -4];
+        w.draw = () => {};
+      }
+    }
+  }
+
+  node._fr = { content: "", status: "idle", fileName: "", fileExt: "", mode: "view" };
 
   // ── Container ──
   const container = document.createElement("div");
@@ -879,6 +1006,23 @@ function setup(node) {
   copyBtn.addEventListener("click", (e) => { e.stopPropagation(); copyContent(node); });
   controls.appendChild(copyBtn);
   node._fr.copyBtn = copyBtn;
+
+  const editBtn = document.createElement("button");
+  editBtn.className = "fr-btn";
+  editBtn.title = "Toggle Edit/View mode";
+  editBtn.innerHTML = ICON_EDIT;
+  editBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleEditMode(node); });
+  controls.appendChild(editBtn);
+  node._fr.editBtn = editBtn;
+
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "fr-btn";
+  saveBtn.title = "Save changes to file";
+  saveBtn.innerHTML = ICON_SAVE;
+  saveBtn.style.display = "none";
+  saveBtn.addEventListener("click", (e) => { e.stopPropagation(); saveToFile(node); });
+  controls.appendChild(saveBtn);
+  node._fr.saveBtn = saveBtn;
 
   // ── Search UI ──
   const searchContainer = document.createElement("div");

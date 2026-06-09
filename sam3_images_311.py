@@ -245,7 +245,11 @@ class SAM3Images311(io.ComfyNode):
                 kept_scores = probs[keep].cpu()
                 kept_masks = masks[keep]
 
-                order = kept_scores.argsort(descending=True)[:min(max_det, max_objects)]
+                # If max_det is 1 (the default when no prompt:N is specified), we allow up to max_objects.
+                # Otherwise, we respect the user's category-level prompt limit (capped at max_objects).
+                limit = max_det if max_det > 1 else max_objects
+                limit = min(limit, max_objects)
+                order = kept_scores.argsort(descending=True)[:limit]
                 kept_boxes = kept_boxes[order]
                 kept_scores = kept_scores[order]
                 kept_masks = kept_masks[order]
@@ -257,6 +261,10 @@ class SAM3Images311(io.ComfyNode):
                     frame_scores.append(float(score))
 
             if len(frame_masks) > 0:
+                # Sort all detected objects across all categories by score descending, keep top max_objects
+                paired = sorted(zip(frame_scores, frame_masks), key=lambda x: x[0], reverse=True)[:max_objects]
+                frame_scores = [x[0] for x in paired]
+                frame_masks = [x[1] for x in paired]
                 all_masks.append(torch.stack(frame_masks, dim=0))  # [N_obj_b, H, W]
             else:
                 all_masks.append(torch.zeros(0, H, W, device=device))

@@ -67,7 +67,7 @@ class FileReader311(io.ComfyNode):
             outputs=[
                 io.String.Output(id="content", display_name="content"),
             ],
-            is_output_node=True,
+            has_intermediate_output=True,
         )
 
     @classmethod

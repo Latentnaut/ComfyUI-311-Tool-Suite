@@ -266,6 +266,7 @@ function setup311(node) {
             var iw = findIndexWidget(this);
             if (!iw || !this.inputs) return;
             var selIdx = iw.value;
+            var labels = getLabels(this);
             
             for (var i = 0; i < this.inputs.length; i++) {
                 var inp = this.inputs[i];
@@ -275,11 +276,38 @@ function setup311(node) {
                 if (!match) continue;
                 
                 var idx = parseInt(match[2], 10);
+                
+                // ── Step 1: Detect user rename from context menu prompt (run for all slots) ──
+                if (inp._311label !== undefined &&
+                    inp.label !== undefined &&
+                    inp.label !== inp._311label &&
+                    inp.label !== " ") {
+                    
+                    var trimmed = (inp.label || "").trim();
+                    if (trimmed === "" || isDefaultName(trimmed)) {
+                        delete labels[i];
+                    } else {
+                        labels[i] = inp.label;
+                    }
+                }
+                
+                var displayedName = labels[i] || inp.name;
+                
                 if (idx === selIdx) {
-                    var labels = getLabels(this);
-                    var displayedName = labels[i] || inp.name;
-                    inp._originalLabelBackup = inp.label !== " " ? inp.label : (displayedName || inp.name);
+                    if (inp._originalLabelBackup === undefined && inp.label !== " ") {
+                        inp._originalLabelBackup = inp.label;
+                    }
                     inp.label = " ";
+                    
+                    // Schedule restoration after the current draw cycle completes
+                    (function(targetInp) {
+                        setTimeout(function () {
+                            if (targetInp._originalLabelBackup !== undefined) {
+                                targetInp.label = targetInp._originalLabelBackup;
+                                delete targetInp._originalLabelBackup;
+                            }
+                        }, 0);
+                    })(inp);
                 }
             }
         } catch (e) {
@@ -319,13 +347,7 @@ function setup311(node) {
                 var idx = parseInt(match[2], 10);
                 var cleanName = inp.name;
 
-                // Restore original label if it was backed up
-                if (idx === selIdx && inp._originalLabelBackup !== undefined) {
-                    inp.label = inp._originalLabelBackup;
-                    delete inp._originalLabelBackup;
-                }
-
-                // ── Step 1: Detect user rename from context menu prompt ──
+                // ── Step 1: Detect user rename from context menu prompt (fallback if drawBackground was skipped) ──
                 if (inp._311label !== undefined &&
                     inp.label !== undefined &&
                     inp.label !== inp._311label &&

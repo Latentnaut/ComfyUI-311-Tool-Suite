@@ -298,16 +298,6 @@ function setup311(node) {
                         inp._originalLabelBackup = inp.label;
                     }
                     inp.label = " ";
-                    
-                    // Schedule restoration after the current draw cycle completes
-                    (function(targetInp) {
-                        setTimeout(function () {
-                            if (targetInp._originalLabelBackup !== undefined) {
-                                targetInp.label = targetInp._originalLabelBackup;
-                                delete targetInp._originalLabelBackup;
-                            }
-                        }, 0);
-                    })(inp);
                 }
             }
         } catch (e) {
@@ -367,6 +357,14 @@ function setup311(node) {
                 // ── Step 3: Render ──
                 if (idx === selIdx) {
                     inp._311label = displayedName;
+
+                    // Synchronously restore the label here so LiteGraph/ComfyUI has it back for context menu and subsequent draws
+                    if (inp._originalLabelBackup !== undefined) {
+                        inp.label = inp._originalLabelBackup;
+                        delete inp._originalLabelBackup;
+                    } else {
+                        inp.label = displayedName;
+                    }
 
                     var connPos = this.getConnectionPos(true, i);
                     if (connPos) {

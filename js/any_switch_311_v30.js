@@ -40,7 +40,12 @@ function getHighlightColor(bgHex) {
 }
 
 function isDefaultName(s) {
-    return /^value\d+$/i.test(s) || /^(values\.)?value\d+$/i.test(s);
+    if (!s) return true;
+    var clean = s.toString().trim();
+    if (/^value\d+$/i.test(clean) || /^(values\.)?value\d+$/i.test(clean)) return true;
+    if (/^\d+\.\s*(values\.)?value\d+$/i.test(clean)) return true;
+    if (/^\d+\.\s*$/i.test(clean)) return true;
+    return false;
 }
 
 // ─── Widget / input helpers ────────────────────────────────────────
@@ -75,7 +80,22 @@ function alignInputNames(node) {
 // ─── Custom label persistence ──────────────────────────────────────
 function getLabels(node) {
     if (!node.properties) node.properties = {};
-    if (!node.properties.customLabels) node.properties.customLabels = [];
+    if (!node.properties.customLabels) {
+        node.properties.customLabels = {};
+    } else if (Array.isArray(node.properties.customLabels)) {
+        var oldArr = node.properties.customLabels;
+        var newObj = {};
+        for (var i = 0; i < oldArr.length; i++) {
+            if (oldArr[i]) {
+                if (node.inputs && node.inputs[i]) {
+                    newObj[node.inputs[i].name] = oldArr[i];
+                } else {
+                    newObj["value" + i] = oldArr[i];
+                }
+            }
+        }
+        node.properties.customLabels = newObj;
+    }
     return node.properties.customLabels;
 }
 
@@ -84,10 +104,11 @@ function captureLabelsFromSavedData(node, data) {
     if (!data || !data.inputs) return;
     var labels = getLabels(node);
     for (var i = 0; i < data.inputs.length; i++) {
+        var name = data.inputs[i].name;
         var lbl = data.inputs[i].label || "";
-        if (lbl && !isDefaultName(lbl) && lbl !== " ") {
-            if (!labels[i]) {
-                labels[i] = lbl;
+        if (name && lbl && !isDefaultName(lbl) && lbl !== " ") {
+            if (!labels[name]) {
+                labels[name] = lbl;
             }
         }
     }
@@ -168,12 +189,6 @@ function cleanupTrailingEmptySlots(node) {
         // Remove trailing empty slots if the penúltimo slot is also empty
         if (lastSlot.inp.link == null && prevSlot.inp.link == null) {
             node.removeInput(lastSlot.indexInNode);
-            
-            var labels = getLabels(node);
-            if (labels && labels.length > lastSlot.indexInNode) {
-                labels.splice(lastSlot.indexInNode, 1);
-            }
-            
             dataSlots.pop();
         } else {
             break;
@@ -217,8 +232,9 @@ function setup311(node) {
     var origRemoveInput = node.removeInput;
     node.removeInput = function (slot) {
         var labels = getLabels(this);
-        if (labels && labels.length > slot) {
-            labels.splice(slot, 1);
+        var inp = this.inputs[slot];
+        if (inp && inp.name) {
+            delete labels[inp.name];
         }
         
         var result;
@@ -263,8 +279,8 @@ function setup311(node) {
         var labels = getLabels(this);
         for (var i = 0; i < this.inputs.length; i++) {
             var inp = this.inputs[i];
-            if (inp && inp.name !== "index") {
-                inp.label = labels[i] || inp.name;
+            if (inp && inp.name && inp.name !== "index") {
+                inp.label = labels[inp.name] || inp.name;
             }
         }
         if (origGetContextMenuOptions) {
@@ -301,13 +317,13 @@ function setup311(node) {
                     
                     var trimmed = (inp.label || "").trim();
                     if (trimmed === "" || isDefaultName(trimmed)) {
-                        delete labels[i];
+                        delete labels[inp.name];
                     } else {
-                        labels[i] = inp.label;
+                        labels[inp.name] = inp.label;
                     }
                 }
                 
-                var displayedName = labels[i] || inp.name;
+                var displayedName = labels[inp.name] || inp.name;
                 
                 if (idx === selIdx) {
                     inp.label = " ";
@@ -360,14 +376,14 @@ function setup311(node) {
                     
                     var trimmed = (inp.label || "").trim();
                     if (trimmed === "" || isDefaultName(trimmed)) {
-                        delete labels[i];
+                        delete labels[inp.name];
                     } else {
-                        labels[i] = inp.label;
+                        labels[inp.name] = inp.label;
                     }
                 }
 
                 // ── Step 2: Determine display name ──
-                var displayedName = labels[i] || cleanName;
+                var displayedName = labels[inp.name] || cleanName;
 
                 // ── Step 3: Render ──
                 if (idx === selIdx) {
@@ -456,15 +472,12 @@ function setup311(node) {
     var origSerialize = node.onSerialize;
     node.onSerialize = function (data) {
         var labels = getLabels(this);
-        if (this.inputs && labels.length > this.inputs.length) {
-            labels.length = this.inputs.length;
-        }
         if (origSerialize) origSerialize.apply(this, arguments);
         if (data && data.inputs && this.inputs) {
             for (var i = 0; i < data.inputs.length; i++) {
                 var inp = this.inputs[i];
-                if (inp) {
-                    data.inputs[i].label = labels[i] || inp.name;
+                if (inp && inp.name) {
+                    data.inputs[i].label = labels[inp.name] || inp.name;
                 }
             }
         }
@@ -484,6 +497,12 @@ app.registerExtension({
     loadedGraphNode(node) {
         if (node.type === NODE_NAME || node.comfyClass === NODE_NAME) {
             setup311(node);
+            // Always run cleanup after loading to handle delayed configurations
+            setTimeout(function () {
+                cleanupTrailingEmptySlots(node);
+                updateIndexMax(node);
+                node.setDirtyCanvas(true, true);
+            }, 100);
         }
     },
 

@@ -16,6 +16,10 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 * **Preservación del Nombre al Renombrar el Slot Seleccionado:** Al destacar el slot seleccionado (dibujado con fondo coloreado), se limpia su propiedad `inp.label = " "` para evitar que LiteGraph/ComfyUI duplique el texto renderizado en pantalla (evitando el texto gris superpuesto).
   - *Problema:* Al intentar renombrar el slot activo, la caja de texto del diálogo aparecía en blanco (con un único espacio `" "`). Si se restauraba el texto de forma síncrona en `onDrawForeground`, ComfyUI seguía dibujando la etiqueta gris por defecto después de este hook.
   - *Solución:* Mantener `inp.label = " "` permanentemente durante todo el renderizado (tanto en `onDrawBackground` como en `onDrawForeground`). Para que LiteGraph tenga el texto correcto en el menú contextual de renombrado, sobreescribimos `getContextMenuOptions` en el nodo para restaurar sincrónicamente las etiquetas reales justo al abrir el menú. Al iniciar el siguiente ciclo de dibujo, `onDrawBackground` detecta cualquier cambio/renombrado (si ocurrió) y vuelve a establecer `inp.label = " "`.
+* **Mapeo por Nombre de Input (Evitar Shift de Slots)**: Las etiquetas personalizadas deben guardarse y cargarse mapeándolas al nombre del input (`labels[inp.name]`) en lugar de por índice de array (`labels[i]`). Como las entradas convertidas a widgets (como `index`) no existen en `node.inputs` del frontend, indexar por posición crea un desfase (shift) de 1 slot al cargar el JSON del grafo.
+* **Limpieza de Prefijos Numéricos**: La función `isDefaultName()` debe validar y descartar nombres por defecto decorados por extensiones del canvas (ej. `"2. value2"`, `"2. "`), previniendo bucles de auto-captura de nombres en cada recarga de página.
+* **Limpieza Post-Carga Diferida**: Programar `cleanupTrailingEmptySlots` en el hook `loadedGraphNode` con un delay de `100ms` asegura que la limpieza de slots vacíos se complete con éxito incluso cuando la carga y enlace de cables en el cliente (como en Mac/Chrome) se demore.
+
 
 
 

@@ -257,6 +257,22 @@ function setup311(node) {
         }
     };
 
+    // Override getContextMenuOptions to temporarily restore labels for context menus (rename prompts)
+    var origGetContextMenuOptions = node.getContextMenuOptions || node.constructor.prototype.getContextMenuOptions;
+    node.getContextMenuOptions = function (canvas) {
+        var labels = getLabels(this);
+        for (var i = 0; i < this.inputs.length; i++) {
+            var inp = this.inputs[i];
+            if (inp && inp.name !== "index") {
+                inp.label = labels[i] || inp.name;
+            }
+        }
+        if (origGetContextMenuOptions) {
+            return origGetContextMenuOptions.apply(this, arguments);
+        }
+        return [];
+    };
+
     // ── Pre-draw slots label hide ──
     var origDrawBg = node.onDrawBackground;
     node.onDrawBackground = function (ctx) {
@@ -294,10 +310,9 @@ function setup311(node) {
                 var displayedName = labels[i] || inp.name;
                 
                 if (idx === selIdx) {
-                    if (inp._originalLabelBackup === undefined && inp.label !== " ") {
-                        inp._originalLabelBackup = inp.label;
-                    }
                     inp.label = " ";
+                } else {
+                    inp.label = displayedName;
                 }
             }
         } catch (e) {
@@ -357,14 +372,7 @@ function setup311(node) {
                 // ── Step 3: Render ──
                 if (idx === selIdx) {
                     inp._311label = displayedName;
-
-                    // Synchronously restore the label here so LiteGraph/ComfyUI has it back for context menu and subsequent draws
-                    if (inp._originalLabelBackup !== undefined) {
-                        inp.label = inp._originalLabelBackup;
-                        delete inp._originalLabelBackup;
-                    } else {
-                        inp.label = displayedName;
-                    }
+                    inp.label = " ";
 
                     var connPos = this.getConnectionPos(true, i);
                     if (connPos) {

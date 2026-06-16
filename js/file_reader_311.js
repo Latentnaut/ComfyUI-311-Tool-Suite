@@ -6,7 +6,7 @@
 
 import { app } from "../../scripts/app.js";
 
-const NODE_TYPE = "FileReader311";
+const NODE_TYPES = ["FileReader311", "FileReaderNode"];
 const MAX_VIEWER_CHARS = 500_000; // 500 KB display limit
 
 /* ─── CSS (injected once into <head>) ─────────────────────── */
@@ -1161,7 +1161,7 @@ app.registerExtension({
   async setup() { ensureCSS(); },
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
-    if (nodeData.name !== NODE_TYPE) return;
+    if (!NODE_TYPES.includes(nodeData.name)) return;
 
     const origExec = nodeType.prototype.onExecuted;
     nodeType.prototype.onExecuted = function (data) {
@@ -1187,7 +1187,7 @@ app.registerExtension({
   },
 
   nodeCreated(node) {
-    if (node.comfyClass !== NODE_TYPE) return;
+    if (!NODE_TYPES.includes(node.comfyClass)) return;
     setup(node);
   },
 });

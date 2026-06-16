@@ -19,7 +19,7 @@ from comfy_api.latest import ComfyExtension, io
 from .nodes import Multiline311
 from .image_batch_311 import ImageBatch311
 from .join_string_311 import JoinString311
-from .file_reader_311 import FileReader311
+from .file_reader_311 import FileReader311, FileReaderNode
 from .sam3_images_311 import SAM3Images311
 from .any_switch_311 import AnySwitch311
 
@@ -34,6 +34,7 @@ class ToolSuite311Extension(ComfyExtension):
             ImageBatch311,
             JoinString311,
             FileReader311,
+            FileReaderNode,
             SAM3Images311,
             AnySwitch311,
             Preview311,

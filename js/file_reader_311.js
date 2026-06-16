@@ -757,6 +757,9 @@ function showContent(node, content, ext, status, fname, error) {
     el.viewer.scrollTop = 0;
   }
   if (el.search && el.search.query) setTimeout(() => performSearch(node, el.search.query), 10);
+
+  // Sync hidden widgets with cache whenever content is updated in UI
+  syncHiddenWidgets(node);
 }
 
 /* ─── Sync hidden widgets with cache (backend fallback) ──── */
@@ -1100,6 +1103,7 @@ function setup(node) {
       node._fr.status = "edited";
       node._fr.content = editor.value;
       if (node._fr.search && node._fr.search.query) performSearch(node, node._fr.search.query);
+      syncHiddenWidgets(node);
     }, 500);
   });
 

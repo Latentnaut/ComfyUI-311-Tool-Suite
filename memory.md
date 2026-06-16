@@ -20,6 +20,12 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 * **Limpieza de Prefijos Numéricos**: La función `isDefaultName()` debe validar y descartar nombres por defecto decorados por extensiones del canvas (ej. `"2. value2"`, `"2. "`), previniendo bucles de auto-captura de nombres en cada recarga de página.
 * **Limpieza Post-Carga Diferida**: Programar `cleanupTrailingEmptySlots` en el hook `loadedGraphNode` con un delay de `100ms` asegura que la limpieza de slots vacíos se complete con éxito incluso cuando la carga y enlace de cables en el cliente (como en Mac/Chrome) se demore.
 
+## 3. Caché de Contenido y Sincronización en File Reader (FileReader311)
+* **Sincronización de Widgets Ocultos en Fallback:**
+  - *Problema:* Si el archivo a leer no se encuentra en el disco (ej. al compartir el workflow o renombrar el archivo), el nodo recurre al caché persistido en `node.properties` de LiteGraph y muestra el contenido correctamente en el visor HTML del frontend. Sin embargo, los widgets ocultos (`_cached_content`, `_cached_file_name`, `_editor_content`) no se actualizaban con este caché de fallback, lo que hacía que al ejecutar el prompt de ComfyUI se enviasen valores vacíos al backend python, resultando en un error de ejecución de "File not found" sin prompt cargado.
+  - *Solución:* Invocar `syncHiddenWidgets(node)` de forma automática cada vez que se actualiza el contenido mostrado en el visor en `showContent()` (cuando no es error) y dentro del event listener debounced de entrada del editor (`input`). Esto garantiza que los widgets internos viajen siempre con los valores correctos en el prompt de ejecución y en la serialización del workflow JSON de ComfyUI.
+
+
 
 
 

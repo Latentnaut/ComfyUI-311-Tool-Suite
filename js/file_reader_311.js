@@ -380,11 +380,20 @@ function initProps(node) {
 }
 
 function getCache(node) {
-  return {
-    content: node.properties?.fr_cache_content || "",
-    name:    node.properties?.fr_cache_name    || "",
-    ext:     node.properties?.fr_cache_ext     || "",
+  const getW = (name) => {
+    const w = node.widgets?.find((w) => w.name === name);
+    if (w && w.value !== undefined && w.value !== null) return w.value;
+    const idx = node.widgets?.findIndex((w) => w.name === name);
+    if (idx >= 0 && node.widgets_values?.[idx] !== undefined && node.widgets_values[idx] !== null)
+      return node.widgets_values[idx];
+    return "";
   };
+  
+  const content = node.properties?.fr_cache_content || getW("_cached_content") || "";
+  const name = node.properties?.fr_cache_name || getW("_cached_file_name") || "";
+  const ext = node.properties?.fr_cache_ext || (name ? "." + name.split(".").pop() : "");
+
+  return { content, name, ext };
 }
 
 function setCache(node, content, name, ext) {
@@ -393,12 +402,34 @@ function setCache(node, content, name, ext) {
   node.properties.fr_cache_name    = name;
   node.properties.fr_cache_ext     = ext;
   node.properties.fr_editor = ""; // clear user override on fresh load
+
+  const setW = (wname, val) => {
+    const w = node.widgets?.find((w) => w.name === wname);
+    if (w) w.value = val || "";
+  };
+  setW("_cached_content", content);
+  setW("_cached_file_name", name);
+  setW("_editor_content", "");
 }
 
-function getEditor(node)    { return node.properties?.fr_editor || ""; }
+function getEditor(node) {
+  const getW = (name) => {
+    const w = node.widgets?.find((w) => w.name === name);
+    if (w && w.value !== undefined && w.value !== null) return w.value;
+    const idx = node.widgets?.findIndex((w) => w.name === name);
+    if (idx >= 0 && node.widgets_values?.[idx] !== undefined && node.widgets_values[idx] !== null)
+      return node.widgets_values[idx];
+    return "";
+  };
+  return node.properties?.fr_editor || getW("_editor_content") || "";
+}
+
 function setEditor(node, v) {
   if (!node.properties) node.properties = {};
   node.properties.fr_editor = v;
+
+  const w = node.widgets?.find((w) => w.name === "_editor_content");
+  if (w) w.value = v || "";
 }
 
 /* ─── Inline Markdown Formatting ──────────────────────────── */

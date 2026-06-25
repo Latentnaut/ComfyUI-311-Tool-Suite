@@ -988,15 +988,17 @@ function setup(node) {
   node.color   = "#252525";
   node.bgcolor = "#1a1a1a";
 
-  // Hide internal cached/editor content widgets from UI to keep the node compact
+  // Ensure the hidden widgets exist in node.widgets so they serialize and sync correctly
   const hiddenWidgetNames = ["_cached_content", "_cached_file_name", "_editor_content"];
-  if (node.widgets) {
-    for (const w of node.widgets) {
-      if (hiddenWidgetNames.includes(w.name)) {
-        w.computeSize = () => [0, -4];
-        w.draw = () => {};
-      }
+  if (!node.widgets) node.widgets = [];
+  for (const name of hiddenWidgetNames) {
+    let w = node.widgets.find((w) => w.name === name);
+    if (!w) {
+      // Add as a hidden text widget
+      w = node.addWidget("text", name, "", () => {}, { serialize: true });
     }
+    w.computeSize = () => [0, -4];
+    w.draw = () => {};
   }
 
   node._fr = { content: "", status: "idle", fileName: "", fileExt: "", mode: "view" };

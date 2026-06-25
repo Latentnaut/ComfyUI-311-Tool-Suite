@@ -142,39 +142,6 @@ class FileReader311(io.ComfyNode):
         )
 
 
-class FileReaderNode(io.ComfyNode):
-    """Legacy alias for FileReader311 to prevent breaking existing workflows."""
-
-    @classmethod
-    def define_schema(cls):
-        return io.Schema(
-            node_id="FileReaderNode",
-            display_name="File Reader (Legacy)",
-            category="311 Tool Suite",
-            description="Reads a text file from disk and outputs its content as a string. Legacy alias.",
-            inputs=[
-                io.String.Input(id="file_path", default="", multiline=False, display_name="File Path"),
-                # Hidden inputs managed by frontend JS — passed as regular optional inputs
-                io.String.Input(id="_cached_content", default="", optional=True),
-                io.String.Input(id="_cached_file_name", default="", optional=True),
-                io.String.Input(id="_editor_content", default="", optional=True),
-            ],
-            outputs=[
-                io.String.Output(id="content", display_name="content"),
-            ],
-            has_intermediate_output=True,
-        )
-
-    @classmethod
-    def fingerprint_inputs(cls, **kwargs):
-        return float("NaN")
-
-    @classmethod
-    def execute(cls, file_path="", _cached_content="", _cached_file_name="", _editor_content=""):
-        return FileReader311.execute(file_path, _cached_content, _cached_file_name, _editor_content)
-
-
-
 # ─── Server Route (refresh without running workflow) ──────────
 try:
     from server import PromptServer

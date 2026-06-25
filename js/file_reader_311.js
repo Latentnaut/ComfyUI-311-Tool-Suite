@@ -6,7 +6,7 @@
 
 import { app } from "../../scripts/app.js";
 
-const NODE_TYPES = ["FileReader311", "FileReaderNode"];
+const NODE_TYPES = ["FileReader311"];
 const MAX_VIEWER_CHARS = 500_000; // 500 KB display limit
 
 /* ─── CSS (injected once into <head>) ─────────────────────── */

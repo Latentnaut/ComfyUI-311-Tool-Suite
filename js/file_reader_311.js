@@ -829,9 +829,356 @@ async function refreshAllFileReaders(graph) {
   const nodes = graph._nodes.filter(
     (n) => n && (NODE_TYPES.includes(n.type) || NODE_TYPES.includes(n.comfyClass))
   );
-  console.info(`[FileReader] Refreshing all ${nodes.length} File Reader nodes in workflow`);
-  const promises = nodes.map((n) => refresh(n).catch((err) => console.error("[FileReader] Failed to refresh node", n.id, err)));
-  await Promise.all(promises);
+  if (nodes.length === 0) {
+    showToast("No File Reader nodes found in workflow", "info");
+    return;
+  }
+
+  showToast(`Caching all ${nodes.length} File Readers...`, "info");
+
+  const promises = nodes.map((n) => 
+    refresh(n)
+      .then(() => {
+        return {
+          id: n.id,
+          title: n.title || "File Reader",
+          fileName: n._fr?.fileName || gw(n, "file_path").split(/[/\\]/).pop() || "untitled",
+          status: n._fr?.status || "error",
+          error: n._fr?.status === "error" ? "Failed to read file" : ""
+        };
+      })
+      .catch((err) => {
+        return {
+          id: n.id,
+          title: n.title || "File Reader",
+          fileName: gw(n, "file_path").split(/[/\\]/).pop() || "untitled",
+          status: "error",
+          error: String(err)
+        };
+      })
+  );
+
+  const results = await Promise.all(promises);
+  showModalAlert(results);
+}
+
+function showToast(message, type = "info") {
+  let toastContainer = document.querySelector(".fr-toast-container");
+  if (!toastContainer) {
+    toastContainer = document.createElement("div");
+    toastContainer.className = "fr-toast-container";
+    document.body.appendChild(toastContainer);
+    
+    if (!document.getElementById("fr-toast-styles")) {
+      const style = document.createElement("style");
+      style.id = "fr-toast-styles";
+      style.textContent = `
+        .fr-toast-container {
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          z-index: 10000;
+          pointer-events: none;
+        }
+        .fr-toast {
+          background: rgba(20, 20, 20, 0.85);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-left: 4px solid #3b82f6;
+          color: #fff;
+          padding: 12px 18px;
+          border-radius: 6px;
+          box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+          font-family: Inter, Arial, sans-serif;
+          font-size: 13px;
+          min-width: 250px;
+          max-width: 400px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          opacity: 0;
+          transform: translateY(-20px);
+          transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+          pointer-events: auto;
+        }
+        .fr-toast-show {
+          opacity: 1;
+          transform: translateY(0);
+        }
+        .fr-toast-fadeout {
+          opacity: 0;
+          transform: translateY(-20px) scale(0.9);
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }
+  
+  const toast = document.createElement("div");
+  toast.className = "fr-toast";
+  if (type === "success") {
+    toast.style.borderLeftColor = "#4ade80";
+  } else if (type === "error") {
+    toast.style.borderLeftColor = "#f87171";
+  } else if (type === "warning") {
+    toast.style.borderLeftColor = "#fbbf24";
+  }
+  
+  toast.innerHTML = `<span>${message}</span>`;
+  toastContainer.appendChild(toast);
+  
+  setTimeout(() => toast.classList.add("fr-toast-show"), 10);
+  
+  setTimeout(() => {
+    toast.classList.add("fr-toast-fadeout");
+    toast.addEventListener("transitionend", () => toast.remove());
+  }, 4000);
+}
+
+function showModalAlert(results) {
+  const existingModal = document.querySelector(".fr-modal-overlay");
+  if (existingModal) existingModal.remove();
+
+  if (!document.getElementById("fr-modal-styles")) {
+    const style = document.createElement("style");
+    style.id = "fr-modal-styles";
+    style.textContent = `
+      .fr-modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10001;
+        opacity: 0;
+        transition: opacity 0.25s ease;
+      }
+      .fr-modal-overlay.show {
+        opacity: 1;
+      }
+      .fr-modal-card {
+        background: rgba(28, 28, 28, 0.85);
+        backdrop-filter: blur(25px);
+        -webkit-backdrop-filter: blur(25px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        width: 90%;
+        max-width: 440px;
+        padding: 24px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+        color: #fff;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        text-align: center;
+        transform: scale(0.9) translateY(20px);
+        transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      }
+      .fr-modal-overlay.show .fr-modal-card {
+        transform: scale(1) translateY(0);
+      }
+      .fr-modal-icon {
+        font-size: 42px;
+        margin-bottom: 12px;
+        display: inline-block;
+      }
+      .fr-modal-title {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 0 12px 0;
+        color: #fff;
+        letter-spacing: 0.5px;
+      }
+      .fr-modal-body {
+        max-height: 240px;
+        overflow-y: auto;
+        margin: 16px 0;
+        padding-right: 6px;
+        text-align: left;
+      }
+      .fr-modal-body::-webkit-scrollbar {
+        width: 4px;
+      }
+      .fr-modal-body::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .fr-modal-body::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.15);
+        border-radius: 2px;
+      }
+      .fr-modal-node-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        font-size: 12px;
+      }
+      .fr-modal-node-item:last-child {
+        border-bottom: none;
+      }
+      .fr-modal-node-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        max-width: 70%;
+      }
+      .fr-modal-node-title {
+        font-weight: 600;
+        color: #eee;
+      }
+      .fr-modal-node-file {
+        font-size: 10px;
+        color: #888;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .fr-modal-node-status {
+        font-size: 9px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-weight: bold;
+        text-transform: uppercase;
+      }
+      .fr-status-live {
+        background: rgba(74, 222, 128, 0.15);
+        color: #4ade80;
+        border: 1px solid rgba(74, 222, 128, 0.3);
+      }
+      .fr-status-cached {
+        background: rgba(251, 191, 36, 0.15);
+        color: #fbbf24;
+        border: 1px solid rgba(251, 191, 36, 0.3);
+      }
+      .fr-status-edited {
+        background: rgba(96, 165, 250, 0.15);
+        color: #60a5fa;
+        border: 1px solid rgba(96, 165, 250, 0.3);
+      }
+      .fr-status-error {
+        background: rgba(248, 113, 113, 0.15);
+        color: #f87171;
+        border: 1px solid rgba(248, 113, 113, 0.3);
+      }
+      .fr-modal-btn {
+        margin-top: 16px;
+        padding: 10px 24px;
+        border: none;
+        border-radius: 6px;
+        color: #fff;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        outline: none;
+      }
+      .fr-modal-btn:hover {
+        transform: translateY(-1px);
+      }
+      .fr-modal-btn:active {
+        transform: translateY(1px);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  const total = results.length;
+  const errors = results.filter(r => r.status === "error").length;
+  const cached = results.filter(r => r.status === "cached").length;
+  const live = results.filter(r => r.status === "live").length;
+  const edited = results.filter(r => r.status === "edited").length;
+
+  let modalType = "success";
+  let icon = "✅";
+  let title = "Workflow Cached Successfully";
+  let btnGradient = "linear-gradient(135deg, #10b981 0%, #047857 100%)";
+  let btnShadow = "rgba(16, 185, 129, 0.3)";
+
+  if (errors > 0) {
+    if (errors === total) {
+      modalType = "error";
+      icon = "❌";
+      title = "Workflow Caching Failed";
+      btnGradient = "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)";
+      btnShadow = "rgba(239, 68, 68, 0.3)";
+    } else {
+      modalType = "warning";
+      icon = "⚠️";
+      title = "Workflow Caching Completed with Warnings";
+      btnGradient = "linear-gradient(135deg, #f59e0b 0%, #b45309 100%)";
+      btnShadow = "rgba(245, 158, 11, 0.3)";
+    }
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "fr-modal-overlay";
+  
+  const card = document.createElement("div");
+  card.className = "fr-modal-card";
+  
+  const nodeItemsHtml = results.map(r => {
+    let statusLabel = r.status;
+    if (r.status === "error" && r.error) statusLabel = "failed";
+    return `
+      <div class="fr-modal-node-item">
+        <div class="fr-modal-node-info">
+          <span class="fr-modal-node-title">${esc(r.title)} (${r.id})</span>
+          <span class="fr-modal-node-file" title="${esc(r.fileName)}">${esc(r.fileName)}</span>
+        </div>
+        <span class="fr-modal-node-status fr-status-${r.status}">${statusLabel}</span>
+      </div>
+    `;
+  }).join("");
+
+  let messageHtml = "";
+  if (modalType === "success") {
+    messageHtml = `All ${total} File Reader nodes have been memorized and cached in the workflow.`;
+  } else if (modalType === "error") {
+    messageHtml = `Failed to read files for all ${total} File Reader nodes.`;
+  } else {
+    messageHtml = `Cached ${live + cached + edited} nodes, but failed to load files for ${errors} nodes.`;
+  }
+
+  card.innerHTML = `
+    <span class="fr-modal-icon">${icon}</span>
+    <h3 class="fr-modal-title">${title}</h3>
+    <p style="font-size: 13px; color: #ccc; margin: 0 0 16px 0; line-height: 1.4;">${messageHtml}</p>
+    <div class="fr-modal-body">
+      ${nodeItemsHtml}
+    </div>
+    <button class="fr-modal-btn" style="background: ${btnGradient}; box-shadow: 0 4px 12px ${btnShadow};">Got it</button>
+  `;
+
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  setTimeout(() => overlay.classList.add("show"), 10);
+
+  const closeModal = () => {
+    overlay.classList.remove("show");
+    overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
+    document.removeEventListener("keydown", handleKeyDown);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Escape") closeModal();
+  };
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeModal();
+  });
+
+  card.querySelector(".fr-modal-btn").addEventListener("click", closeModal);
+  document.addEventListener("keydown", handleKeyDown);
 }
 
 async function refresh(node) {

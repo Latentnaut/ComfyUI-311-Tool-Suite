@@ -1096,10 +1096,11 @@ function showModalAlert(results) {
   const cached = results.filter(r => r.status === "cached").length;
   const live = results.filter(r => r.status === "live").length;
   const edited = results.filter(r => r.status === "edited").length;
+  const successfulCount = live + cached + edited;
 
   let modalType = "success";
   let icon = "✅";
-  let title = "Workflow Cached Successfully";
+  let title = `Successfully Cached ${total} Files`;
   let btnGradient = "linear-gradient(135deg, #10b981 0%, #047857 100%)";
   let btnShadow = "rgba(16, 185, 129, 0.3)";
 
@@ -1107,13 +1108,13 @@ function showModalAlert(results) {
     if (errors === total) {
       modalType = "error";
       icon = "❌";
-      title = "Workflow Caching Failed";
+      title = `Failed to Cache ${total} Files`;
       btnGradient = "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)";
       btnShadow = "rgba(239, 68, 68, 0.3)";
     } else {
       modalType = "warning";
       icon = "⚠️";
-      title = "Workflow Caching Completed with Warnings";
+      title = `Cached ${successfulCount} of ${total} Files`;
       btnGradient = "linear-gradient(135deg, #f59e0b 0%, #b45309 100%)";
       btnShadow = "rgba(245, 158, 11, 0.3)";
     }
@@ -1141,11 +1142,11 @@ function showModalAlert(results) {
 
   let messageHtml = "";
   if (modalType === "success") {
-    messageHtml = `All ${total} File Reader nodes have been memorized and cached in the workflow.`;
+    messageHtml = `All ${total} files have been successfully read and cached in this workflow.`;
   } else if (modalType === "error") {
-    messageHtml = `Failed to read files for all ${total} File Reader nodes.`;
+    messageHtml = `Failed to read any of the ${total} files. Please check paths and node configurations.`;
   } else {
-    messageHtml = `Cached ${live + cached + edited} nodes, but failed to load files for ${errors} nodes.`;
+    messageHtml = `Successfully cached ${successfulCount} out of ${total} files. ${errors} file(s) failed to load.`;
   }
 
   card.innerHTML = `

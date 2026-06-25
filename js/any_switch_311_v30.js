@@ -4,6 +4,8 @@ console.log("[311] loading any_switch_311_v30.js");
 
 const NODE_NAME = "AnySwitch311";
 
+let is_loading_graph = true;
+
 // ─── Drawing helpers ───────────────────────────────────────────────
 function rrect(ctx, x, y, w, h, r) {
     ctx.beginPath();
@@ -214,7 +216,7 @@ function setup311(node) {
     // INMEDIATE Cleanup for UI interactive node creation:
     // If the node is newly created by the user, we clean up empty slots immediately
     // to prevent the node from rendering with Python's default 60 empty inputs on the first frames.
-    if (node.inputs && node.inputs.length > 2) {
+    if (!is_loading_graph && node.inputs && node.inputs.length > 2) {
         cleanupTrailingEmptySlots(node);
         updateIndexMax(node);
     }
@@ -487,6 +489,23 @@ function setup311(node) {
 // ─── Extension registration ───────────────────────────────────────
 app.registerExtension({
     name: "ComfyUI-311-Tool-Suite.AnySwitch311.v30",
+
+    setup() {
+        // Clear loading flag after app setup phase
+        setTimeout(function () {
+            is_loading_graph = false;
+        }, 500);
+    },
+
+    beforeConfigureGraph(graphData, missingNodeTypes) {
+        is_loading_graph = true;
+    },
+
+    afterConfigureGraph(missingNodeTypes) {
+        setTimeout(function () {
+            is_loading_graph = false;
+        }, 50);
+    },
 
     nodeCreated(node) {
         if (node.type === NODE_NAME || node.comfyClass === NODE_NAME) {

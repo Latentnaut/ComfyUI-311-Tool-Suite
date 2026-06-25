@@ -33,6 +33,9 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 * **Creación Explícita de Widgets Ocultos de Caché**:
   - *Problema:* En algunas versiones o configuraciones de ComfyUI, los inputs opcionales (`_cached_content`, etc.) no se crean como widgets en `node.widgets` del frontend. Si no existen, los métodos de persistencia y sincronización (`setCache`, `getCache`, `syncHiddenWidgets`) no pueden leer ni escribir en ellos, lo que causa que los valores nunca se guarden en `widgets_values` del JSON del workflow. Al abrir en otra máquina con las propiedades vacías, no hay caché que recuperar de los widgets y se muestra "File not found" vacío.
   - *Solución:* Asegurar que los widgets existan explícitamente en `node.widgets` dentro de `setup(node)`. Si no están, se crean de forma dinámica usando `node.addWidget("text", name, "", () => {}, { serialize: true })` antes de ocultarlos de la interfaz estableciendo su tamaño a `[0, -4]` y su función `draw` vacía. Esto garantiza que LiteGraph siempre los serialice en `widgets_values` y se restauren por posición en la carga del workflow.
+* **Refresco Masivo Concurrente (Shift+Click en Refresh)**:
+  - *Problema:* Tener que hacer clic individualmente en el botón de actualización de cada nodo `FileReader311` del canvas (cuando se tienen decenas de ellos) para forzar su caché antes de guardar y exportar el flujo de trabajo es ineficiente y tedioso.
+  - *Solución:* Modificar el manejador del botón de actualización para que detecte si la tecla `Shift` está presionada (`e.shiftKey === true`). Si es así, se ejecuta la función `refreshAllFileReaders(graph)`, la cual busca y filtra todos los nodos del canvas correspondientes a `FileReader311` y `FileReaderNode` y dispara concurrently la actualización y recarga de caché en todos ellos de forma paralela usando `Promise.all`.
 
 
 

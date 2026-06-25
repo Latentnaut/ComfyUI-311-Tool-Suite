@@ -824,6 +824,16 @@ function onExec(node, data) {
 
 /* ─── Refresh via Server Route ────────────────────────────── */
 
+async function refreshAllFileReaders(graph) {
+  if (!graph) return;
+  const nodes = graph._nodes.filter(
+    (n) => n && (NODE_TYPES.includes(n.type) || NODE_TYPES.includes(n.comfyClass))
+  );
+  console.info(`[FileReader] Refreshing all ${nodes.length} File Reader nodes in workflow`);
+  const promises = nodes.map((n) => refresh(n).catch((err) => console.error("[FileReader] Failed to refresh node", n.id, err)));
+  await Promise.all(promises);
+}
+
 async function refresh(node) {
   const el = node._fr;
   if (!el) return;
@@ -1029,9 +1039,16 @@ function setup(node) {
 
   const refreshBtn = document.createElement("button");
   refreshBtn.className = "fr-btn";
-  refreshBtn.title = "Refresh file content";
+  refreshBtn.title = "Refresh file content (Shift+Click to refresh ALL File Readers)";
   refreshBtn.innerHTML = ICON_REFRESH;
-  refreshBtn.addEventListener("click", (e) => { e.stopPropagation(); refresh(node); });
+  refreshBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (e.shiftKey && node.graph) {
+      refreshAllFileReaders(node.graph);
+    } else {
+      refresh(node);
+    }
+  });
   controls.appendChild(refreshBtn);
   node._fr.refreshBtn = refreshBtn;
 

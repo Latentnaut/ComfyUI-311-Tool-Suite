@@ -4,6 +4,15 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 
 ---
 
+## 0. Image Comparer 311 (batch grid)
+* **Diferencia vs rgthree:** rgthree Image Comparer obliga a elegir un índice del batch (A1/B2…). Image Comparer 311 empareja `image_a[i]` con `image_b[i]` y pinta **todos** los pares en un grid DOM (estilo Preview), cada celda con slider L/R.
+* **UI output keys:** el backend V3 no usa `ui.PreviewImage` (eso poblaría `images` y activaría el strip nativo). Devuelve `{"a_images": [...], "b_images": [...]}` vía `io.NodeOutput(ui=dict)` y el JS monta el grid. Siempre llamar `clearNodeImagePreview(node)` en create/execute/configure.
+* **Broadcast:** si un lado tiene length 1 y el otro N, se reutiliza esa imagen en los N pares. Si solo hay un lado, se muestran las imágenes sin clip.
+* **Height loop:** el widget DOM usa `computeSize` anclado + `node.computeSize` mínimo (spec n311 §3.4), igual que el template del skill `comfy-node-ui-design`.
+* **Cambio Slide↔Click:** no reconstruir el grid (eso recargaba `<img>` y flashaba negro + divisor blanco al 0%). Solo rebindear handlers con `AbortController` y ocultar el divider en ratio 0/1.
+
+---
+
 ## 1. Detección de Objetos en SAM3 (SAM3 Images 311)
 * **Límite de Objetos de Detección en SAM3:** El codificador de prompts de SAM3 en ComfyUI limita por defecto la detección a `1` objeto por categoría si no se especifica el sufijo `:N` (ej. `product:6`) en el texto del prompt.
   - *Solución:* En los nodos que tengan un slider de `max_objects` (como `SAM3 Images 311`), interceptamos el límite por defecto `1` y usamos en su lugar `max_objects`. Además, se ordena el conjunto final de detecciones de todas las categorías combinadas por confianza de forma descendente y se recorta a `max_objects` para respetar el límite de forma global en el fotograma.

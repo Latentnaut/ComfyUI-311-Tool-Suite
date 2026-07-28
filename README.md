@@ -33,6 +33,13 @@ Concatenates multiple string inputs together with custom delimiters.
 ### 🍌 SAM3 Images 311
 Helper utility node for Segment Anything 3 workflows.
 
+### ⚖️ Image Comparer 311
+Batch-aware left/right image comparison (rgthree-style slider).
+*   **All pairs at once:** Unlike rgthree Image Comparer, every `image_a[i]` / `image_b[i]` pair is shown in a Preview-style grid — no batch-index picking.
+*   **Slide / Click modes:** Hover to wipe, or hold-click to reveal B.
+*   **Columns:** 1–4 column layout from the bottom toolbar.
+*   **Broadcast:** A length-1 input is paired against every image on the other side.
+
 ## Installation
 
 Go to your ComfyUI `custom_nodes` directory and clone this repository:

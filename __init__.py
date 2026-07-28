@@ -11,6 +11,8 @@ Nodes:
   - SAM3 Images 311: All-in-one SAM3 segmentation with preview + mask arithmetic
   - Preview 311: Draggable image preview with drag-and-drop support
   - Any Switch 311: Any-type index switch with clickable input button menu
+  - Preview Bridge 311: Image preview bridge with Clipspace mask editing
+  - Image Comparer 311: Batch L/R image comparison grid (all pairs at once)
 """
 
 from typing_extensions import override
@@ -24,6 +26,8 @@ from .sam3_images_311 import SAM3Images311
 from .any_switch_311 import AnySwitch311
 
 from .preview_311 import Preview311
+from .preview_bridge_311 import PreviewBridge311
+from .image_comparer_311 import ImageComparer311
 
 
 class ToolSuite311Extension(ComfyExtension):
@@ -38,6 +42,8 @@ class ToolSuite311Extension(ComfyExtension):
             SAM3Images311,
             AnySwitch311,
             Preview311,
+            PreviewBridge311,
+            ImageComparer311,
         ]
 
 

@@ -6,6 +6,9 @@ and dropped onto other nodes (e.g. Load Image) to reuse the output.
 Part of the 311 Tool Suite (V3 API).
 """
 
+import os
+
+import folder_paths
 from comfy_api.latest import io, ui
 
 
@@ -37,4 +40,7 @@ class Preview311(io.ComfyNode):
 
     @classmethod
     def execute(cls, images) -> io.NodeOutput:
+        # Multiple ComfyUI instances share the same temp dir; any instance
+        # start/stop can rmtree it via cleanup_temp(). Recreate before save.
+        os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
         return io.NodeOutput(ui=ui.PreviewImage(images))

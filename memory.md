@@ -5,11 +5,12 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 ---
 
 ## 0. Image Comparer 311 (batch grid)
-* **Diferencia vs rgthree:** rgthree Image Comparer obliga a elegir un índice del batch (A1/B2…). Image Comparer 311 empareja `image_a[i]` con `image_b[i]` y pinta **todos** los pares en un grid DOM (estilo Preview), cada celda con slider L/R.
-* **UI output keys:** el backend V3 no usa `ui.PreviewImage` (eso poblaría `images` y activaría el strip nativo). Devuelve `{"a_images": [...], "b_images": [...]}` vía `io.NodeOutput(ui=dict)` y el JS monta el grid. Siempre llamar `clearNodeImagePreview(node)` en create/execute/configure.
-* **Broadcast:** si un lado tiene length 1 y el otro N, se reutiliza esa imagen en los N pares. Si solo hay un lado, se muestran las imágenes sin clip.
-* **Height loop:** el widget DOM usa `computeSize` anclado + `node.computeSize` mínimo (spec n311 §3.4), igual que el template del skill `comfy-node-ui-design`.
-* **Cambio Slide↔Click:** no reconstruir el grid (eso recargaba `<img>` y flashaba negro + divisor blanco al 0%). Solo rebindear handlers con `AbortController` y ocultar el divider en ratio 0/1.
+* **Diferencia vs rgthree:** rgthree Image Comparer obliga a elegir un índice del batch. Image Comparer 311 empareja `image_top[i]` con `image_bottom[i]` y pinta **todos** los pares en un grid DOM (estilo Preview).
+* **Capas:** `image_bottom` es la base; `image_top` es el overlay (wipe desde la izquierda). Slide en reposo = ratio 1 (solo top). Click en reposo = top; al mantener = bottom.
+* **UI output keys:** `{"top_images": [...], "bottom_images": [...]}` vía `io.NodeOutput(ui=dict)`. Siempre `clearNodeImagePreview(node)`.
+* **Broadcast:** length 1 vs N reutiliza esa imagen en los N pares.
+* **Height loop:** `computeSize` anclado + `node.computeSize` mínimo (spec n311 §3.4).
+* **Cambio Slide↔Click:** rebindear handlers in-place (`AbortController`); ocultar divider en ratio 0/1.
 
 ---
 

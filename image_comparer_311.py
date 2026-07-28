@@ -2,8 +2,10 @@
 Image Comparer 311 — Batch-aware side-by-side image comparison.
 
 Like rgthree Image Comparer (left/right slide), but shows every paired
-image_a[i] / image_b[i] at once in a Preview-style grid instead of
+image_top[i] / image_bottom[i] at once in a Preview-style grid instead of
 picking a single pair from the batch.
+
+image_top is the new image overlaid on image_bottom (the base).
 
 Part of the 311 Tool Suite (V3 API).
 """
@@ -39,25 +41,27 @@ class ImageComparer311(io.ComfyNode):
             category="311 Tool Suite",
             description=(
                 "Compare two image batches with a left/right slider on every pair at once. "
-                "image_a[i] is overlaid on image_b[i] (length-1 inputs broadcast). "
-                "Unlike rgthree Image Comparer, you do not pick a single batch index."
+                "image_top is the new image overlaid on image_bottom (base). "
+                "Slide starts fully right (top only); drag left to reveal bottom. "
+                "Click shows top, hold to reveal bottom. Length-1 inputs broadcast."
             ),
             search_aliases=[
                 "image comparer", "compare", "slider", "before after",
                 "diff", "side by side", "batch compare", "rgthree comparer",
+                "top", "bottom",
             ],
             inputs=[
                 io.Image.Input(
-                    "image_a",
+                    "image_top",
                     optional=True,
-                    display_name="image_a",
-                    tooltip="First image / batch (shown on the left of each pair).",
+                    display_name="image_top",
+                    tooltip="New / overlay image batch. Shown by default (slide fully right).",
                 ),
                 io.Image.Input(
-                    "image_b",
+                    "image_bottom",
                     optional=True,
-                    display_name="image_b",
-                    tooltip="Second image / batch (revealed on the right of each pair).",
+                    display_name="image_bottom",
+                    tooltip="Base image batch underneath. Revealed by sliding left or holding click.",
                 ),
             ],
             outputs=[],
@@ -65,7 +69,7 @@ class ImageComparer311(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, image_a=None, image_b=None) -> io.NodeOutput:
-        a_images = _save_batch(image_a, "comparer311_a", cls)
-        b_images = _save_batch(image_b, "comparer311_b", cls)
-        return io.NodeOutput(ui={"a_images": a_images, "b_images": b_images})
+    def execute(cls, image_top=None, image_bottom=None) -> io.NodeOutput:
+        top_images = _save_batch(image_top, "comparer311_top", cls)
+        bottom_images = _save_batch(image_bottom, "comparer311_bot", cls)
+        return io.NodeOutput(ui={"top_images": top_images, "bottom_images": bottom_images})

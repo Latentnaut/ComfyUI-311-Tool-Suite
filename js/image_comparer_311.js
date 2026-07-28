@@ -2,8 +2,11 @@
  * Image Comparer 311 — Frontend
  *
  * Batch-aware L/R image comparison grid.
- * Shows every image_a[i] / image_b[i] pair at once (Preview-style),
- * each cell with rgthree-like slide (or click) reveal.
+ * Shows every image_top[i] / image_bottom[i] pair at once (Preview-style).
+ *
+ * Layering: bottom is the base; top is the overlay wipe from the left.
+ * Slide default = fully right (top only). Drag left to reveal bottom.
+ * Click default = top; hold click = bottom.
  *
  * Spec: docs/UI_DESIGN_SYSTEM.md (n311 tokens + DOM widget shell)
  */
@@ -12,7 +15,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const NODE_NAME = "ImageComparer311";
-const STYLE_ID = "image-comparer-311-n311-style";
+const STYLE_ID = "image-comparer-311-n311-style-v2";
 const WIDGET_NAME = "ic311_ui";
 const MIN_HEIGHT = 180;
 const NODE_HEADER_H = 30;
@@ -20,6 +23,9 @@ const NODE_SLOT_H = 22;
 const NODE_PADDING_V = 12;
 const MIN_NODE_W = 360;
 const MIN_NODE_H = 320;
+
+/** Default wipe position: fully right = top only. */
+const SLIDE_REST = 1;
 
 function imgURL(d) {
   if (!d) return "";
@@ -40,6 +46,8 @@ function clearNodeImagePreview(node) {
 }
 
 function injectStyles() {
+  const prev = document.getElementById("image-comparer-311-n311-style");
+  if (prev) prev.remove();
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -85,13 +93,22 @@ function injectStyles() {
       position: relative;
       border-radius: 6px;
       overflow: hidden;
-      border: 1px solid var(--n311-border-strong, #444);
-      background: var(--n311-bg-thumb, #353535);
+      border: 1px solid transparent;
+      background: transparent;
       cursor: ew-resize;
       user-select: none;
-      aspect-ratio: 1 / 1;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate3d(0, 0, 0);
+      backface-visibility: hidden;
     }
-    .ic311-cell:hover { border-color: var(--n311-accent-dim, #5a7abf); }
+    .ic311-cell.is-ready {
+      opacity: 1;
+      pointer-events: auto;
+      border-color: var(--n311-border-strong, #444);
+      background: var(--n311-bg-thumb, #353535);
+    }
+    .ic311-cell.is-ready:hover { border-color: var(--n311-accent-dim, #5a7abf); }
 
     .ic311-layer {
       position: absolute;
@@ -99,18 +116,23 @@ function injectStyles() {
       width: 100%;
       height: 100%;
       object-fit: contain;
-      background: #111;
+      background: transparent;
       pointer-events: none;
       display: block;
+      transform: translate3d(0, 0, 0);
+      backface-visibility: hidden;
     }
-    .ic311-b-clip {
+    .ic311-top-clip {
       position: absolute;
       inset: 0 auto 0 0;
-      width: 50%;
+      width: 100%;
       overflow: hidden;
       pointer-events: none;
+      will-change: width;
+      transform: translate3d(0, 0, 0);
+      backface-visibility: hidden;
     }
-    .ic311-b-clip .ic311-layer {
+    .ic311-top-clip .ic311-layer {
       position: absolute;
       left: 0; top: 0;
       width: var(--ic311-full-w, 100%);
@@ -121,11 +143,14 @@ function injectStyles() {
       position: absolute;
       top: 0; bottom: 0;
       width: 0;
-      left: 50%;
+      left: 100%;
       border-left: 1px solid rgba(255,255,255,0.95);
       mix-blend-mode: difference;
       pointer-events: none;
       z-index: 2;
+      will-change: left;
+      transform: translate3d(0, 0, 0);
+      backface-visibility: hidden;
     }
     .ic311-badge {
       position: absolute; top: 2px; left: 3px;
@@ -134,15 +159,16 @@ function injectStyles() {
       padding: 1px 4px; border-radius: 2px;
       pointer-events: none; z-index: 3;
     }
-    .ic311-labels {
+    .ic311-view-label {
       position: absolute; top: 2px; right: 3px;
-      display: flex; gap: 3px;
-      pointer-events: none; z-index: 3;
-    }
-    .ic311-label {
       background: rgba(0,0,0,0.55); color: #e0e0e0;
       font-size: 8px; font-weight: bold;
       padding: 1px 4px; border-radius: 2px;
+      pointer-events: none; z-index: 3;
+    }
+    .ic311-root.ic311-hide-overlays .ic311-badge,
+    .ic311-root.ic311-hide-overlays .ic311-view-label {
+      display: none;
     }
 
     .ic311-actionbar {
@@ -152,12 +178,7 @@ function injectStyles() {
       background: var(--n311-bg-panel, #1e1e1e);
       border-top: 1px solid var(--n311-border, #333);
     }
-    .ic311-status {
-      flex: 1;
-      font-size: 11px; line-height: 1.25;
-      color: var(--n311-text-muted, #aaa);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
+    .ic311-spacer { flex: 1; min-width: 0; }
     .ic311-btn {
       appearance: none;
       background: var(--n311-bg-btn, #2a2a2a);
@@ -175,71 +196,153 @@ function injectStyles() {
       color: var(--n311-accent, #7ab0ff);
       border-color: var(--n311-accent-dim, #5a7abf);
     }
-    .ic311-cols {
-      display: flex; gap: 4px; flex-shrink: 0;
+    .ic311-btn--ghost {
+      background: transparent;
+      border-color: transparent;
+      color: var(--n311-text-dim, #888);
+      padding: 6px 6px;
+      font-size: 10px;
     }
+    .ic311-btn--ghost:hover {
+      background: transparent;
+      border-color: transparent;
+      color: var(--n311-text-muted, #aaa);
+    }
+    .ic311-cols {
+      display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+    }
+    .ic311-cols-label {
+      font-size: 10px;
+      color: var(--n311-text-dim, #888);
+      letter-spacing: 0.02em;
+      user-select: none;
+    }
+    .ic311-cols-spin {
+      display: flex; align-items: stretch;
+      height: 24px;
+      border: 1px solid var(--n311-border-strong, #444);
+      border-radius: 4px;
+      overflow: hidden;
+      background: var(--n311-bg-elev, #252525);
+    }
+    .ic311-cols-spin:hover { border-color: #666; }
+    .ic311-cols-spin:focus-within {
+      border-color: var(--n311-accent-dim, #5a7abf);
+    }
+    .ic311-cols-input {
+      width: 28px;
+      height: 100%;
+      box-sizing: border-box;
+      background: transparent;
+      color: var(--n311-text-muted, #aaa);
+      border: none;
+      padding: 0 2px 0 6px;
+      font-family: inherit;
+      font-size: 11px;
+      text-align: center;
+      outline: none;
+      -moz-appearance: textfield;
+    }
+    .ic311-cols-input:focus { color: var(--n311-text, #e0e0e0); }
+    .ic311-cols-input::-webkit-inner-spin-button,
+    .ic311-cols-input::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .ic311-cols-arrows {
+      display: flex; flex-direction: column;
+      width: 14px;
+      border-left: 1px solid var(--n311-border-subtle, #2a2a2a);
+    }
+    .ic311-cols-arrow {
+      appearance: none;
+      flex: 1;
+      margin: 0; padding: 0;
+      border: none;
+      background: transparent;
+      color: #444;
+      font-size: 7px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ic311-cols-arrow:hover { color: #666; background: rgba(255,255,255,0.03); }
   `;
   document.head.appendChild(style);
 }
 
-/** Pair a_images[i] with b_images[i]; length-1 side broadcasts. */
-function buildPairs(aImages, bImages) {
-  const a = aImages || [];
-  const b = bImages || [];
-  if (!a.length && !b.length) return [];
+/** Pair top[i] with bottom[i]; length-1 side broadcasts. */
+function buildPairs(topImages, bottomImages) {
+  const top = topImages || [];
+  const bottom = bottomImages || [];
+  if (!top.length && !bottom.length) return [];
 
-  if (!a.length) {
-    return b.map((img, i) => ({ index: i, a: null, b: img }));
+  if (!top.length) {
+    return bottom.map((img, i) => ({ index: i, top: null, bottom: img }));
   }
-  if (!b.length) {
-    return a.map((img, i) => ({ index: i, a: img, b: null }));
+  if (!bottom.length) {
+    return top.map((img, i) => ({ index: i, top: img, bottom: null }));
   }
 
   let count;
-  if (a.length === 1) count = b.length;
-  else if (b.length === 1) count = a.length;
-  else count = Math.min(a.length, b.length);
+  if (top.length === 1) count = bottom.length;
+  else if (bottom.length === 1) count = top.length;
+  else count = Math.min(top.length, bottom.length);
 
   const pairs = [];
   for (let i = 0; i < count; i++) {
     pairs.push({
       index: i,
-      a: a.length === 1 ? a[0] : a[i],
-      b: b.length === 1 ? b[0] : b[i],
+      top: top.length === 1 ? top[0] : top[i],
+      bottom: bottom.length === 1 ? bottom[0] : bottom[i],
     });
   }
   return pairs;
 }
 
+/** ratio 1 = fully right (top only); ratio 0 = fully left (bottom only). */
 function setClip(cell, ratio) {
   const r = Math.max(0, Math.min(1, ratio));
-  const clip = cell.querySelector(".ic311-b-clip");
+  const clip = cell.querySelector(".ic311-top-clip");
   const divider = cell.querySelector(".ic311-divider");
   if (!clip) return;
   const pct = `${(r * 100).toFixed(2)}%`;
   clip.style.width = pct;
   if (divider) {
     divider.style.left = pct;
-    // Hide at extremes — a 0%/100% divider reads as a white scratch on black.
     divider.style.display = r <= 0.001 || r >= 0.999 ? "none" : "";
   }
+  updateViewLabel(cell, r);
+}
+
+function updateViewLabel(cell, ratio) {
+  const label = cell.querySelector(".ic311-view-label");
+  if (!label) return;
+  // Dominating side: top when wipe covers >= half, else bottom.
+  label.textContent = ratio >= 0.5 ? "Top" : "Bot";
 }
 
 function syncClipWidth(cell) {
-  const clip = cell.querySelector(".ic311-b-clip");
+  const clip = cell.querySelector(".ic311-top-clip");
   if (!clip) return;
   clip.style.setProperty("--ic311-full-w", `${cell.clientWidth}px`);
 }
 
 function pointerRatio(cell, clientX) {
-  const rect = cell.getBoundingClientRect();
-  if (rect.width <= 0) return 0.5;
+  const rect = cell._cachedRect || (cell._cachedRect = cell.getBoundingClientRect());
+  if (rect.width <= 0) return SLIDE_REST;
   return (clientX - rect.left) / rect.width;
+}
+
+function clampColumns(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return 4;
+  return Math.max(1, Math.min(16, v));
 }
 
 /** Bind Slide/Click handlers without recreating <img> (avoids black flash). */
 function bindCellMode(cell, mode) {
-  if (!cell.querySelector(".ic311-b-clip")) {
+  if (!cell.querySelector(".ic311-top-clip")) {
     cell.style.cursor = "default";
     return;
   }
@@ -250,9 +353,14 @@ function bindCellMode(cell, mode) {
   const opts = { signal: ac.signal };
   cell._ic311Down = false;
 
+  const updateRect = () => {
+    cell._cachedRect = cell.getBoundingClientRect();
+  };
+
   if (mode === "Click") {
     cell.style.cursor = "pointer";
-    setClip(cell, 0);
+    // Rest = top; hold = bottom.
+    setClip(cell, 1);
     cell.addEventListener(
       "pointerdown",
       (ev) => {
@@ -260,40 +368,55 @@ function bindCellMode(cell, mode) {
         ev.preventDefault();
         ev.stopPropagation();
         cell._ic311Down = true;
-        setClip(cell, 1);
+        setClip(cell, 0);
       },
       opts
     );
     const release = () => {
       if (!cell._ic311Down) return;
       cell._ic311Down = false;
-      setClip(cell, 0);
+      setClip(cell, 1);
     };
     cell.addEventListener("pointerup", release, opts);
     cell.addEventListener("pointerleave", release, opts);
     cell.addEventListener("pointercancel", release, opts);
   } else {
     cell.style.cursor = "ew-resize";
-    setClip(cell, 0.5);
+    setClip(cell, SLIDE_REST);
+
+    let ticking = false;
+    let lastClientX = 0;
+
     cell.addEventListener(
       "pointerenter",
       (ev) => {
+        updateRect();
         syncClipWidth(cell);
-        setClip(cell, pointerRatio(cell, ev.clientX));
+        lastClientX = ev.clientX;
+        setClip(cell, pointerRatio(cell, lastClientX));
       },
       opts
     );
     cell.addEventListener(
       "pointermove",
       (ev) => {
-        setClip(cell, pointerRatio(cell, ev.clientX));
+        lastClientX = ev.clientX;
+        if (!ticking) {
+          requestAnimationFrame(() => {
+            if (cell._ic311Abort && !cell._ic311Abort.signal.aborted) {
+              setClip(cell, pointerRatio(cell, lastClientX));
+            }
+            ticking = false;
+          });
+          ticking = true;
+        }
       },
       opts
     );
     cell.addEventListener(
       "pointerleave",
       () => {
-        setClip(cell, 0.5);
+        setClip(cell, SLIDE_REST);
       },
       opts
     );
@@ -307,13 +430,16 @@ function applyMode(node) {
   for (const cell of ui.grid.querySelectorAll(".ic311-cell")) {
     bindCellMode(cell, mode);
   }
-  updateStatus(node);
 }
 
 function applyColumns(node) {
   const ui = node._ic311;
   if (!ui) return;
-  const cols = Math.max(1, Math.min(8, Number(node.properties?.ic311_columns) || 2));
+  const cols = clampColumns(node.properties?.ic311_columns ?? 4);
+  node.properties.ic311_columns = cols;
+  if (ui.colsInput && String(ui.colsInput.value) !== String(cols)) {
+    ui.colsInput.value = String(cols);
+  }
   ui.grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
   requestAnimationFrame(() => {
     for (const cell of ui.grid.querySelectorAll(".ic311-cell")) {
@@ -322,20 +448,15 @@ function applyColumns(node) {
   });
 }
 
-function updateStatus(node) {
-  const ui = node._ic311;
-  if (!ui) return;
-  const pairs = buildPairs(node._ic311A, node._ic311B);
-  const mode = node.properties?.ic311_mode === "Click" ? "Click" : "Slide";
-  if (!pairs.length) {
-    ui.status.textContent = "No images";
-    return;
-  }
-  const both = pairs.filter((p) => p.a && p.b).length;
-  ui.status.textContent =
-    both === pairs.length
-      ? `${pairs.length} pair${pairs.length === 1 ? "" : "s"} · ${mode}`
-      : `${pairs.length} image${pairs.length === 1 ? "" : "s"} · ${mode}`;
+function whenImageReady(img) {
+  return new Promise((resolve) => {
+    if (img.complete && img.naturalWidth > 0) {
+      resolve();
+      return;
+    }
+    img.addEventListener("load", () => resolve(), { once: true });
+    img.addEventListener("error", () => resolve(), { once: true });
+  });
 }
 
 function buildCell(pair) {
@@ -343,31 +464,26 @@ function buildCell(pair) {
   cell.className = "ic311-cell";
   cell.dataset.index = String(pair.index);
 
-  const hasA = !!pair.a;
-  const hasB = !!pair.b;
+  const hasTop = !!pair.top;
+  const hasBottom = !!pair.bottom;
 
-  // Base layer: prefer A, fall back to B when only one side exists.
+  // Base layer = bottom (underneath). Fall back to top when only one side.
   const base = document.createElement("img");
   base.className = "ic311-layer";
   base.draggable = false;
-  base.addEventListener("load", () => {
-    if (base.naturalWidth > 0 && base.naturalHeight > 0) {
-      cell.style.aspectRatio = `${base.naturalWidth} / ${base.naturalHeight}`;
-    }
-    syncClipWidth(cell);
-  });
-  if (hasA) base.src = imgURL(pair.a);
-  else if (hasB) base.src = imgURL(pair.b);
+  if (hasBottom) base.src = imgURL(pair.bottom);
+  else if (hasTop) base.src = imgURL(pair.top);
   cell.appendChild(base);
 
-  if (hasA && hasB) {
+  let topImg = null;
+  if (hasTop && hasBottom) {
     const clip = document.createElement("div");
-    clip.className = "ic311-b-clip";
-    const top = document.createElement("img");
-    top.className = "ic311-layer";
-    top.draggable = false;
-    top.src = imgURL(pair.b);
-    clip.appendChild(top);
+    clip.className = "ic311-top-clip";
+    topImg = document.createElement("img");
+    topImg.className = "ic311-layer";
+    topImg.draggable = false;
+    topImg.src = imgURL(pair.top);
+    clip.appendChild(topImg);
     cell.appendChild(clip);
 
     const divider = document.createElement("div");
@@ -382,29 +498,31 @@ function buildCell(pair) {
   badge.textContent = String(pair.index + 1);
   cell.appendChild(badge);
 
-  const labels = document.createElement("div");
-  labels.className = "ic311-labels";
-  if (hasA) {
-    const la = document.createElement("span");
-    la.className = "ic311-label";
-    la.textContent = "A";
-    labels.appendChild(la);
+  if (hasTop || hasBottom) {
+    const viewLabel = document.createElement("span");
+    viewLabel.className = "ic311-view-label";
+    viewLabel.textContent = hasTop ? "Top" : "Bot";
+    cell.appendChild(viewLabel);
   }
-  if (hasB) {
-    const lb = document.createElement("span");
-    lb.className = "ic311-label";
-    lb.textContent = "B";
-    labels.appendChild(lb);
-  }
-  cell.appendChild(labels);
 
-  requestAnimationFrame(() => syncClipWidth(cell));
+  // Reveal only when images are ready at the final aspect ratio (no black square flash).
+  const wait = [whenImageReady(base)];
+  if (topImg) wait.push(whenImageReady(topImg));
+  cell._ic311Ready = Promise.all(wait).then(() => {
+    const ref = topImg && topImg.naturalWidth > 0 ? topImg : base;
+    if (ref.naturalWidth > 0 && ref.naturalHeight > 0) {
+      cell.style.aspectRatio = `${ref.naturalWidth} / ${ref.naturalHeight}`;
+    }
+    cell.classList.add("is-ready");
+    syncClipWidth(cell);
+  });
+
   return cell;
 }
 
 function pairsSignature(pairs) {
   return pairs
-    .map((p) => `${p.a?.filename || ""}|${p.b?.filename || ""}`)
+    .map((p) => `${p.top?.filename || ""}|${p.bottom?.filename || ""}`)
     .join(";");
 }
 
@@ -412,13 +530,13 @@ function renderGrid(node) {
   const ui = node._ic311;
   if (!ui) return;
 
-  const pairs = buildPairs(node._ic311A, node._ic311B);
+  const pairs = buildPairs(node._ic311Top, node._ic311Bottom);
   const mode = node.properties?.ic311_mode === "Click" ? "Click" : "Slide";
   const sig = pairsSignature(pairs);
 
   applyColumns(node);
+  applyOverlays(node);
 
-  // Same image set → only rebind mode (no <img> reload / black flash).
   if (ui._pairsSig === sig && ui.grid.childElementCount === pairs.length && pairs.length) {
     applyMode(node);
     return;
@@ -430,39 +548,51 @@ function renderGrid(node) {
   if (!pairs.length) {
     const empty = document.createElement("div");
     empty.className = "ic311-empty";
-    empty.textContent = "Connect image_a and/or image_b, then queue.";
+    empty.textContent = "Connect image_top and/or image_bottom, then queue.";
     ui.content.replaceChildren(empty);
-    ui.status.textContent = "No images";
     return;
   }
 
   ui.content.replaceChildren(ui.grid);
+  const cells = [];
   for (const pair of pairs) {
     const cell = buildCell(pair);
+    cells.push(cell);
     ui.grid.appendChild(cell);
     bindCellMode(cell, mode);
   }
 
-  updateStatus(node);
-
-  requestAnimationFrame(() => {
-    for (const cell of ui.grid.querySelectorAll(".ic311-cell")) {
-      syncClipWidth(cell);
-    }
+  // Show the whole grid together once every cell has its final aspect ratio.
+  const renderGen = (ui._renderGen = (ui._renderGen || 0) + 1);
+  Promise.all(cells.map((c) => c._ic311Ready)).then(() => {
+    if (ui._renderGen !== renderGen) return;
+    for (const cell of cells) syncClipWidth(cell);
   });
+}
+
+function applyOverlays(node) {
+  const ui = node._ic311;
+  if (!ui) return;
+  const show = node.properties?.ic311_show_overlays !== false;
+  ui.root.classList.toggle("ic311-hide-overlays", !show);
+  if (ui.overlaysBtn) {
+    ui.overlaysBtn.textContent = show ? "Hide" : "Show";
+    ui.overlaysBtn.title = show
+      ? "Hide index and Top/Bot overlays"
+      : "Show index and Top/Bot overlays";
+  }
 }
 
 function syncToolbar(node) {
   const ui = node._ic311;
   if (!ui) return;
   const mode = node.properties?.ic311_mode === "Click" ? "Click" : "Slide";
-  const cols = Math.max(1, Math.min(8, Number(node.properties?.ic311_columns) || 2));
+  const cols = clampColumns(node.properties?.ic311_columns ?? 4);
 
   ui.modeSlide.classList.toggle("is-active", mode === "Slide");
   ui.modeClick.classList.toggle("is-active", mode === "Click");
-  for (const btn of ui.colBtns) {
-    btn.classList.toggle("is-active", Number(btn.dataset.cols) === cols);
-  }
+  if (ui.colsInput) ui.colsInput.value = String(cols);
+  applyOverlays(node);
 }
 
 function buildWidget(node) {
@@ -470,7 +600,9 @@ function buildWidget(node) {
 
   if (!node.properties) node.properties = {};
   if (node.properties.ic311_mode == null) node.properties.ic311_mode = "Slide";
-  if (node.properties.ic311_columns == null) node.properties.ic311_columns = 2;
+  if (node.properties.ic311_columns == null) node.properties.ic311_columns = 4;
+  if (node.properties.ic311_show_overlays == null) node.properties.ic311_show_overlays = true;
+  node.properties.ic311_columns = clampColumns(node.properties.ic311_columns);
 
   const root = document.createElement("div");
   root.className = "ic311-root";
@@ -485,43 +617,107 @@ function buildWidget(node) {
   const bar = document.createElement("div");
   bar.className = "ic311-actionbar";
 
-  const status = document.createElement("span");
-  status.className = "ic311-status";
-  status.textContent = "Ready";
+  const overlaysBtn = document.createElement("button");
+  overlaysBtn.className = "ic311-btn ic311-btn--ghost";
+  overlaysBtn.type = "button";
+  overlaysBtn.textContent = "Hide";
+  overlaysBtn.title = "Hide index and Top/Bot overlays";
+
+  const spacer = document.createElement("div");
+  spacer.className = "ic311-spacer";
 
   const modeSlide = document.createElement("button");
   modeSlide.className = "ic311-btn";
   modeSlide.type = "button";
   modeSlide.textContent = "Slide";
-  modeSlide.title = "Reveal B by hovering left/right";
+  modeSlide.title = "Default: top only. Drag left to reveal bottom.";
 
   const modeClick = document.createElement("button");
   modeClick.className = "ic311-btn";
   modeClick.type = "button";
   modeClick.textContent = "Click";
-  modeClick.title = "Hold click to show B";
+  modeClick.title = "Shows top; hold click to reveal bottom.";
 
   const colsWrap = document.createElement("div");
   colsWrap.className = "ic311-cols";
-  const colBtns = [];
-  for (const n of [1, 2, 3, 4]) {
-    const btn = document.createElement("button");
-    btn.className = "ic311-btn";
-    btn.type = "button";
-    btn.textContent = String(n);
-    btn.title = `${n} column${n === 1 ? "" : "s"}`;
-    btn.dataset.cols = String(n);
-    btn.addEventListener("click", (ev) => {
+  const colsLabel = document.createElement("span");
+  colsLabel.className = "ic311-cols-label";
+  colsLabel.textContent = "Col";
+
+  const colsSpin = document.createElement("div");
+  colsSpin.className = "ic311-cols-spin";
+  const colsInput = document.createElement("input");
+  colsInput.className = "ic311-cols-input";
+  colsInput.type = "text";
+  colsInput.inputMode = "numeric";
+  colsInput.pattern = "[0-9]*";
+  colsInput.value = String(clampColumns(node.properties.ic311_columns));
+  colsInput.title = "Grid columns";
+
+  const arrows = document.createElement("div");
+  arrows.className = "ic311-cols-arrows";
+  const upBtn = document.createElement("button");
+  upBtn.className = "ic311-cols-arrow";
+  upBtn.type = "button";
+  upBtn.textContent = "▲";
+  upBtn.title = "Increase columns";
+  const downBtn = document.createElement("button");
+  downBtn.className = "ic311-cols-arrow";
+  downBtn.type = "button";
+  downBtn.textContent = "▼";
+  downBtn.title = "Decrease columns";
+  arrows.append(upBtn, downBtn);
+  colsSpin.append(colsInput, arrows);
+  colsWrap.append(colsLabel, colsSpin);
+
+  const commitCols = () => {
+    const cols = clampColumns(colsInput.value);
+    colsInput.value = String(cols);
+    node.properties.ic311_columns = cols;
+    applyColumns(node);
+    app.graph?.setDirtyCanvas?.(true);
+  };
+  const nudgeCols = (delta) => {
+    const cols = clampColumns((Number(colsInput.value) || 4) + delta);
+    colsInput.value = String(cols);
+    node.properties.ic311_columns = cols;
+    applyColumns(node);
+    app.graph?.setDirtyCanvas?.(true);
+  };
+  colsInput.addEventListener("change", commitCols);
+  colsInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
       ev.preventDefault();
-      ev.stopPropagation();
-      node.properties.ic311_columns = n;
-      syncToolbar(node);
-      applyColumns(node);
-      app.graph?.setDirtyCanvas?.(true);
-    });
-    colsWrap.appendChild(btn);
-    colBtns.push(btn);
-  }
+      commitCols();
+      colsInput.blur();
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      nudgeCols(1);
+    } else if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      nudgeCols(-1);
+    }
+    ev.stopPropagation();
+  });
+  colsInput.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  upBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    nudgeCols(1);
+  });
+  downBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    nudgeCols(-1);
+  });
+
+  overlaysBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    node.properties.ic311_show_overlays = !(node.properties.ic311_show_overlays !== false);
+    applyOverlays(node);
+    app.graph?.setDirtyCanvas?.(true);
+  });
 
   modeSlide.addEventListener("click", (ev) => {
     ev.preventDefault();
@@ -538,7 +734,8 @@ function buildWidget(node) {
     applyMode(node);
   });
 
-  bar.append(status, colsWrap, modeSlide, modeClick);
+  // Left: overlays + Col · Right: Slide / Click
+  bar.append(overlaysBtn, colsWrap, spacer, modeSlide, modeClick);
   root.append(content, bar);
 
   node._ic311 = {
@@ -546,19 +743,18 @@ function buildWidget(node) {
     content,
     grid,
     bar,
-    status,
     modeSlide,
     modeClick,
-    colBtns,
+    colsInput,
+    overlaysBtn,
   };
 
-  // Stop LiteGraph from treating widget pointer events as node drags.
   root.addEventListener("pointerdown", (ev) => ev.stopPropagation());
 
-  // Keep B-clip full-width in sync when the node is resized.
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => {
       for (const cell of grid.querySelectorAll(".ic311-cell")) {
+        cell._cachedRect = cell.getBoundingClientRect();
         syncClipWidth(cell);
       }
     });
@@ -585,7 +781,6 @@ app.registerExtension({
         this.setSize([420, 480]);
       }
 
-      // Pin computeSize to break the LiteGraph widget↔node height loop.
       this.computeSize = function () {
         return [MIN_NODE_W, MIN_NODE_H];
       };
@@ -622,8 +817,8 @@ app.registerExtension({
     const onExecuted = nodeType.prototype.onExecuted;
     nodeType.prototype.onExecuted = function (output) {
       if (onExecuted) onExecuted.apply(this, arguments);
-      this._ic311A = output?.a_images || [];
-      this._ic311B = output?.b_images || [];
+      this._ic311Top = output?.top_images || [];
+      this._ic311Bottom = output?.bottom_images || [];
       clearNodeImagePreview(this);
       renderGrid(this);
       syncToolbar(this);
@@ -638,6 +833,17 @@ app.registerExtension({
         renderGrid(this);
       }
       return r;
+    };
+
+    const onDestroy = nodeType.prototype.onDestroy;
+    nodeType.prototype.onDestroy = function () {
+      if (this._ic311ResizeObserver) {
+        this._ic311ResizeObserver.disconnect();
+      }
+      for (const cell of this._ic311?.grid?.querySelectorAll?.(".ic311-cell") || []) {
+        cell._ic311Abort?.abort();
+      }
+      if (onDestroy) onDestroy.apply(this, arguments);
     };
   },
 });

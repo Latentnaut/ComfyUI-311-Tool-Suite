@@ -40,10 +40,10 @@ class ImageComparer311(io.ComfyNode):
             display_name="Image Comparer 311",
             category="311 Tool Suite",
             description=(
-                "Compare two image batches with a left/right slider on every pair at once. "
-                "image_top is the new image overlaid on image_bottom (base). "
-                "Slide starts fully right (top only); drag left to reveal bottom. "
-                "Click shows top, hold to reveal bottom. Length-1 inputs broadcast."
+                "Compare two image batches with Slide / Click wipe. "
+                "image_top is the overlay on image_bottom (base). "
+                "With Overlay on, a 9-dot handle drags image_top to other nodes. "
+                "Length-1 inputs broadcast."
             ),
             search_aliases=[
                 "image comparer", "compare", "slider", "before after",

@@ -4,13 +4,24 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 
 ---
 
+## CDS (ComfyUI Design System)
+
+- **Local hub:** [`.cds/README.md`](.cds/README.md) (junction -> `docs/CDS`)
+- **Spec:** `.cds/SPEC.md` -> `docs/UI_DESIGN_SYSTEM.md` (**v1.3**)
+- **Performance:** `.cds/PERFORMANCE.md`
+- Agent skill: `comfy-node-ui-design` (also under the portable `.agent/skills/`)
+- `ImageComparer311` drove CDS v1.3; shared detail lives in CDS.
+
 ## 0. Image Comparer 311 (batch grid)
 * **Diferencia vs rgthree:** rgthree Image Comparer obliga a elegir un índice del batch. Image Comparer 311 empareja `image_top[i]` con `image_bottom[i]` y pinta **todos** los pares en un grid DOM (estilo Preview).
 * **Capas:** `image_bottom` es la base; `image_top` es el overlay (wipe desde la izquierda). Slide en reposo = ratio 1 (solo top). Click en reposo = top; al mantener = bottom.
 * **UI output keys:** `{"top_images": [...], "bottom_images": [...]}` vía `io.NodeOutput(ui=dict)`. Siempre `clearNodeImagePreview(node)`.
 * **Broadcast:** length 1 vs N reutiliza esa imagen en los N pares.
-* **Height loop:** `computeSize` anclado + `node.computeSize` mínimo (spec n311 §3.4).
-* **Cambio Slide↔Click:** rebindear handlers in-place (`AbortController`); ocultar divider en ratio 0/1.
+* **Height / performance / Overlay / Col:** see CDS sections 2.10-2.12, 3.5 and PERFORMANCE.md.
+* **Broken first N cells (browser chrome):** Never treat `img.onerror` as ready. Burst `/view` on fresh temp PNGs (8×2) can fail intermittently (conn limit / AV lock). Fix: concurrency queue (4), retry with plain PNG + cache-bust, clear `src` on failure, CDS `Unavailable` — never leave native broken-image icons.
+* **Drag-out (CDS §2.13):** No Drag mode. With **Overlay on**, each cell shows a 9-dot handle (bottom-right); hover → pointer + blue frame; press-drag exports **image_top**. Overlay off hides the handle. Slide/Click unchanged.
+* **Drag ghost:** Always a `<canvas>` painted from the visible decoded bitmap (`ghostSource` / `node.imgs[idx]`). Never a floating `<img src=/view>` — failed or empty src showed native broken-image chrome (§4.8). Fallback URL load paints into the same canvas; onerror → CDS mini "Unavailable". `viewURL` uses `encodeURIComponent` like Image Selector / MIL.
+* **Preview batch index:** ComfyUI grid mode keeps `imageIndex === null` and sets `overIndex` on hover. Always use `resolvePreviewImageIndex` — never `imageIndex ?? 0` (that always dragged image 0). Grip is the only drag start target; `⇱` emoji badge removed (CDS v1.6).
 
 ---
 

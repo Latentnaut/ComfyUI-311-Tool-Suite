@@ -12,7 +12,7 @@ Nodes:
   - Preview 311: Draggable image preview with drag-and-drop support
   - Any Switch 311: Any-type index switch with clickable input button menu
   - Preview Bridge 311: Image preview bridge with Clipspace mask editing
-  - Image Comparer 311: Batch L/R image comparison grid (all pairs at once)
+  - Image Comparer 311: Batch L/R image comparison grid (all pairs at once) with drag-out
 """
 
 from typing_extensions import override

@@ -5,17 +5,18 @@
  * Shows every image_top[i] / image_bottom[i] pair at once (Preview-style).
  *
  * Layering: bottom is the base; top is the overlay wipe from the left.
- * Slide default = fully right (top only). Drag left to reveal bottom.
- * Click default = top; hold click = bottom.
+ * Slide: hover wipe. Click: hold for bottom.
+ * Overlay on: 9-dot handle (bottom-right) arms drag-out of image_top.
  *
  * Spec: docs/UI_DESIGN_SYSTEM.md (n311 tokens + DOM widget shell)
  */
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { beginDragOut, makeDragHandleButton } from "./image_drag_out_311.js";
 
 const NODE_NAME = "ImageComparer311";
-const STYLE_ID = "image-comparer-311-n311-style-v2";
+const STYLE_ID = "image-comparer-311-n311-style-v9";
 const WIDGET_NAME = "ic311_ui";
 const MIN_HEIGHT = 180;
 const NODE_HEADER_H = 30;
@@ -27,13 +28,104 @@ const MIN_NODE_H = 320;
 /** Default wipe position: fully right = top only. */
 const SLIDE_REST = 1;
 
-function imgURL(d) {
-  if (!d) return "";
+/** Cap parallel /view fetches — bursts of 16+ hit browser/server races on fresh temp PNGs. */
+const LOAD_CONCURRENCY = 4;
+const LOAD_ATTEMPTS = [
+  { preview: true, delayMs: 0 },
+  { preview: false, delayMs: 100 },
+  { preview: false, delayMs: 250 },
+];
+
+let _loadActive = 0;
+const _loadQueue = [];
+
+function _pumpLoadQueue() {
+  while (_loadActive < LOAD_CONCURRENCY && _loadQueue.length) {
+    const job = _loadQueue.shift();
+    _loadActive++;
+    Promise.resolve()
+      .then(job.fn)
+      .then(job.resolve, job.reject)
+      .finally(() => {
+        _loadActive--;
+        _pumpLoadQueue();
+      });
+  }
+}
+
+function enqueueLoad(fn) {
+  return new Promise((resolve, reject) => {
+    _loadQueue.push({ fn, resolve, reject });
+    _pumpLoadQueue();
+  });
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function appendQuery(url, fragment) {
+  if (!fragment) return url;
+  const f = String(fragment);
+  if (f.startsWith("&") || f.startsWith("?")) return url + f.replace(/^\?/, "&");
+  return `${url}&${f}`;
+}
+
+function imgURL(d, { preview = true, bust = true } = {}) {
+  if (!d?.filename) return "";
   const p = new URLSearchParams();
   p.set("filename", d.filename);
   if (d.subfolder) p.set("subfolder", d.subfolder);
   p.set("type", d.type || "temp");
-  return api.apiURL(`/view?${p}${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`);
+  let url = api.apiURL(`/view?${p}`);
+  if (preview) url = appendQuery(url, app.getPreviewFormatParam?.() || "");
+  if (bust) {
+    const rand = app.getRandParam?.() || `&rand=${Math.random()}`;
+    url = appendQuery(url, rand);
+  }
+  return url;
+}
+
+function waitLoadOrError(img, timeoutMs = 12000) {
+  return new Promise((resolve) => {
+    if (img.complete && img.naturalWidth > 0) {
+      resolve(true);
+      return;
+    }
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      img.removeEventListener("load", onLoad);
+      img.removeEventListener("error", onError);
+      resolve(ok);
+    };
+    const onLoad = () => finish(img.naturalWidth > 0);
+    const onError = () => finish(false);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    img.addEventListener("load", onLoad);
+    img.addEventListener("error", onError);
+  });
+}
+
+/** Load a temp preview with retries (plain PNG fallback). Never leave browser broken-image chrome. */
+async function assignImageSrc(img, data) {
+  if (!img || !data?.filename) return false;
+  img.alt = "";
+  img.decoding = "async";
+
+  for (const attempt of LOAD_ATTEMPTS) {
+    if (attempt.delayMs) await sleep(attempt.delayMs);
+    const ok = await enqueueLoad(async () => {
+      img.src = imgURL(data, { preview: attempt.preview, bust: true });
+      return waitLoadOrError(img);
+    });
+    if (ok) return true;
+  }
+
+  img.removeAttribute("src");
+  return false;
 }
 
 function clearNodeImagePreview(node) {
@@ -46,8 +138,14 @@ function clearNodeImagePreview(node) {
 }
 
 function injectStyles() {
-  const prev = document.getElementById("image-comparer-311-n311-style");
-  if (prev) prev.remove();
+  document.getElementById("image-comparer-311-n311-style")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v2")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v3")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v4")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v5")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v6")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v7")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v8")?.remove();
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -109,6 +207,24 @@ function injectStyles() {
       background: var(--n311-bg-thumb, #353535);
     }
     .ic311-cell.is-ready:hover { border-color: var(--n311-accent-dim, #5a7abf); }
+    .ic311-cell.is-unavailable {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: default;
+      min-height: 64px;
+      aspect-ratio: 1;
+    }
+    .ic311-cell.is-unavailable .ic311-layer,
+    .ic311-cell.is-unavailable .ic311-top-clip,
+    .ic311-cell.is-unavailable .ic311-divider {
+      display: none;
+    }
+    .ic311-unavailable-msg {
+      color: var(--n311-text-dim, #888);
+      font-size: 10px;
+      pointer-events: none;
+    }
 
     .ic311-layer {
       position: absolute;
@@ -167,8 +283,43 @@ function injectStyles() {
       pointer-events: none; z-index: 3;
     }
     .ic311-root.ic311-hide-overlays .ic311-badge,
-    .ic311-root.ic311-hide-overlays .ic311-view-label {
+    .ic311-root.ic311-hide-overlays .ic311-view-label,
+    .ic311-root.ic311-hide-overlays .ic311-drag-handle {
+      display: none !important;
+    }
+    .ic311-drag-handle {
+      appearance: none;
+      position: absolute; right: 3px; bottom: 3px;
+      width: 22px; height: 22px;
       display: none;
+      align-items: center; justify-content: center;
+      padding: 0; margin: 0;
+      background: rgba(0,0,0,0.55);
+      color: #aaa;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      z-index: 4;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .ic311-drag-handle svg { display: block; pointer-events: none; }
+    .ic311-root:not(.ic311-hide-overlays) .ic311-cell.is-ready.has-top .ic311-drag-handle {
+      display: flex;
+    }
+    .ic311-drag-handle:hover,
+    .ic311-cell.is-drag-hot .ic311-drag-handle {
+      color: var(--n311-accent, #7ab0ff);
+      border-color: rgba(122,176,255,0.55);
+      background: rgba(0,0,0,0.75);
+      cursor: pointer;
+    }
+    .ic311-cell.is-ready.is-drag-hot {
+      border-color: var(--n311-accent, #7ab0ff) !important;
+      box-shadow: inset 0 0 0 1px rgba(122,176,255,0.35);
+    }
+    .ic311-cell.is-dragging {
+      border-color: var(--n311-accent, #7ab0ff) !important;
+      opacity: 0.92;
     }
 
     .ic311-actionbar {
@@ -196,17 +347,54 @@ function injectStyles() {
       color: var(--n311-accent, #7ab0ff);
       border-color: var(--n311-accent-dim, #5a7abf);
     }
-    .ic311-btn--ghost {
-      background: transparent;
-      border-color: transparent;
-      color: var(--n311-text-dim, #888);
-      padding: 6px 6px;
-      font-size: 10px;
+    .ic311-overlay-ctrl {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+      user-select: none;
     }
-    .ic311-btn--ghost:hover {
-      background: transparent;
-      border-color: transparent;
-      color: var(--n311-text-muted, #aaa);
+    .ic311-overlay-label {
+      font-size: 10px;
+      color: var(--n311-text-dim, #888);
+      letter-spacing: 0.02em;
+    }
+    .ic311-toggle {
+      appearance: none;
+      position: relative;
+      width: 22px;
+      height: 12px;
+      padding: 0;
+      border: none;
+      border-radius: 999px;
+      background: #333;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background .15s ease;
+    }
+    .ic311-toggle::after {
+      content: "";
+      position: absolute;
+      top: 1px;
+      left: 1px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #666;
+      transition: transform .15s ease, background .15s ease;
+    }
+    .ic311-toggle.is-on {
+      background: #3f3f3f;
+    }
+    .ic311-toggle.is-on::after {
+      transform: translateX(10px);
+      background: #999;
+    }
+    .ic311-toggle:hover {
+      background: #3a3a3a;
+    }
+    .ic311-toggle.is-on:hover {
+      background: #484848;
     }
     .ic311-cols {
       display: flex; align-items: center; gap: 4px; flex-shrink: 0;
@@ -303,6 +491,7 @@ function buildPairs(topImages, bottomImages) {
 /** ratio 1 = fully right (top only); ratio 0 = fully left (bottom only). */
 function setClip(cell, ratio) {
   const r = Math.max(0, Math.min(1, ratio));
+  cell._ic311Ratio = r;
   const clip = cell.querySelector(".ic311-top-clip");
   const divider = cell.querySelector(".ic311-divider");
   if (!clip) return;
@@ -313,6 +502,11 @@ function setClip(cell, ratio) {
     divider.style.display = r <= 0.001 || r >= 0.999 ? "none" : "";
   }
   updateViewLabel(cell, r);
+}
+
+/** Drag/copy always use image_top (null if missing). */
+function dragImageData(cell) {
+  return cell._ic311Pair?.top || null;
 }
 
 function updateViewLabel(cell, ratio) {
@@ -340,18 +534,31 @@ function clampColumns(n) {
   return Math.max(1, Math.min(16, v));
 }
 
-/** Bind Slide/Click handlers without recreating <img> (avoids black flash). */
-function bindCellMode(cell, mode) {
-  if (!cell.querySelector(".ic311-top-clip")) {
-    cell.style.cursor = "default";
-    return;
-  }
+function normalizeMode(m) {
+  return m === "Click" ? "Click" : "Slide";
+}
 
+function makeDragHandle() {
+  return makeDragHandleButton({
+    title: "Drag top image to another node",
+    ariaLabel: "Drag top image",
+  });
+}
+
+/** Bind Slide / Click without recreating <img> (avoids black flash). */
+function bindCellMode(cell, mode) {
   cell._ic311Abort?.abort();
   const ac = new AbortController();
   cell._ic311Abort = ac;
   const opts = { signal: ac.signal };
   cell._ic311Down = false;
+  cell._ic311Mode = mode;
+
+  const hasWipe = !!cell.querySelector(".ic311-top-clip");
+  if (!hasWipe) {
+    cell.style.cursor = "default";
+    return;
+  }
 
   const updateRect = () => {
     cell._cachedRect = cell.getBoundingClientRect();
@@ -359,12 +566,12 @@ function bindCellMode(cell, mode) {
 
   if (mode === "Click") {
     cell.style.cursor = "pointer";
-    // Rest = top; hold = bottom.
     setClip(cell, 1);
     cell.addEventListener(
       "pointerdown",
       (ev) => {
         if (ev.button !== 0) return;
+        if (ev.target?.closest?.(".ic311-drag-handle")) return;
         ev.preventDefault();
         ev.stopPropagation();
         cell._ic311Down = true;
@@ -378,57 +585,133 @@ function bindCellMode(cell, mode) {
       setClip(cell, 1);
     };
     cell.addEventListener("pointerup", release, opts);
-    cell.addEventListener("pointerleave", release, opts);
     cell.addEventListener("pointercancel", release, opts);
-  } else {
-    cell.style.cursor = "ew-resize";
-    setClip(cell, SLIDE_REST);
-
-    let ticking = false;
-    let lastClientX = 0;
-
-    cell.addEventListener(
-      "pointerenter",
-      (ev) => {
-        updateRect();
-        syncClipWidth(cell);
-        lastClientX = ev.clientX;
-        setClip(cell, pointerRatio(cell, lastClientX));
-      },
-      opts
-    );
-    cell.addEventListener(
-      "pointermove",
-      (ev) => {
-        lastClientX = ev.clientX;
-        if (!ticking) {
-          requestAnimationFrame(() => {
-            if (cell._ic311Abort && !cell._ic311Abort.signal.aborted) {
-              setClip(cell, pointerRatio(cell, lastClientX));
-            }
-            ticking = false;
-          });
-          ticking = true;
-        }
-      },
-      opts
-    );
-    cell.addEventListener(
-      "pointerleave",
-      () => {
-        setClip(cell, SLIDE_REST);
-      },
-      opts
-    );
+    cell.addEventListener("pointerleave", release, opts);
+    return;
   }
+
+  // Slide — hover wipe (no button required).
+  cell.style.cursor = "ew-resize";
+  setClip(cell, SLIDE_REST);
+
+  let ticking = false;
+  let lastClientX = 0;
+
+  cell.addEventListener(
+    "pointerenter",
+    (ev) => {
+      if (ev.target?.closest?.(".ic311-drag-handle")) return;
+      updateRect();
+      syncClipWidth(cell);
+      lastClientX = ev.clientX;
+      setClip(cell, pointerRatio(cell, lastClientX));
+    },
+    opts
+  );
+  cell.addEventListener(
+    "pointermove",
+    (ev) => {
+      if (ev.target?.closest?.(".ic311-drag-handle")) return;
+      lastClientX = ev.clientX;
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          if (cell._ic311Abort && !cell._ic311Abort.signal.aborted) {
+            setClip(cell, pointerRatio(cell, lastClientX));
+          }
+          ticking = false;
+        });
+        ticking = true;
+      }
+    },
+    opts
+  );
+  cell.addEventListener(
+    "pointerleave",
+    () => {
+      setClip(cell, SLIDE_REST);
+    },
+    opts
+  );
+}
+
+/** 9-dot handle: hover arms blue frame; press starts drag-out of image_top. */
+function bindDragHandle(cell, node) {
+  cell._ic311DragAbort?.abort();
+  const handle = cell.querySelector(".ic311-drag-handle");
+  if (!handle) return;
+
+  const ac = new AbortController();
+  cell._ic311DragAbort = ac;
+  const opts = { signal: ac.signal };
+
+  const setHot = (on) => {
+    cell.classList.toggle("is-drag-hot", !!on);
+  };
+
+  handle.addEventListener(
+    "pointerenter",
+    () => {
+      if (!dragImageData(cell)) return;
+      setHot(true);
+    },
+    opts
+  );
+  handle.addEventListener(
+    "pointerleave",
+    () => {
+      if (!cell.classList.contains("is-dragging")) setHot(false);
+    },
+    opts
+  );
+  handle.addEventListener(
+    "pointerdown",
+    (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!cell.classList.contains("is-ready")) return;
+      if (cell.classList.contains("is-unavailable")) return;
+
+      const imgData = dragImageData(cell);
+      if (!imgData) return;
+
+      const topImg = cell.querySelector(".ic311-top-clip .ic311-layer");
+      const baseImg = cell.querySelector(".ic311-layer");
+      const ghostSource =
+        (topImg?.naturalWidth > 0 && topImg) ||
+        (baseImg?.naturalWidth > 0 && baseImg) ||
+        null;
+
+      setHot(true);
+      beginDragOut({
+        sourceNode: node,
+        imgData,
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+        ghostSource,
+        namePrefix: "comparer311",
+        onDragStart: () => {
+          cell.classList.add("is-dragging");
+          setHot(true);
+        },
+        onDragEnd: () => {
+          cell.classList.remove("is-dragging");
+          setHot(false);
+        },
+      });
+    },
+    opts
+  );
 }
 
 function applyMode(node) {
   const ui = node._ic311;
   if (!ui) return;
-  const mode = node.properties?.ic311_mode === "Click" ? "Click" : "Slide";
+  const mode = normalizeMode(node.properties?.ic311_mode);
+  node.properties.ic311_mode = mode;
   for (const cell of ui.grid.querySelectorAll(".ic311-cell")) {
     bindCellMode(cell, mode);
+    bindDragHandle(cell, node);
   }
 }
 
@@ -448,41 +731,33 @@ function applyColumns(node) {
   });
 }
 
-function whenImageReady(img) {
-  return new Promise((resolve) => {
-    if (img.complete && img.naturalWidth > 0) {
-      resolve();
-      return;
-    }
-    img.addEventListener("load", () => resolve(), { once: true });
-    img.addEventListener("error", () => resolve(), { once: true });
-  });
-}
-
 function buildCell(pair) {
   const cell = document.createElement("div");
   cell.className = "ic311-cell";
   cell.dataset.index = String(pair.index);
+  cell._ic311Pair = pair;
+  cell._ic311Ratio = 1;
 
   const hasTop = !!pair.top;
   const hasBottom = !!pair.bottom;
+  if (hasTop) cell.classList.add("has-top");
 
   // Base layer = bottom (underneath). Fall back to top when only one side.
   const base = document.createElement("img");
   base.className = "ic311-layer";
   base.draggable = false;
-  if (hasBottom) base.src = imgURL(pair.bottom);
-  else if (hasTop) base.src = imgURL(pair.top);
+  base.alt = "";
   cell.appendChild(base);
 
   let topImg = null;
+  let clip = null;
   if (hasTop && hasBottom) {
-    const clip = document.createElement("div");
+    clip = document.createElement("div");
     clip.className = "ic311-top-clip";
     topImg = document.createElement("img");
     topImg.className = "ic311-layer";
     topImg.draggable = false;
-    topImg.src = imgURL(pair.top);
+    topImg.alt = "";
     clip.appendChild(topImg);
     cell.appendChild(clip);
 
@@ -505,17 +780,39 @@ function buildCell(pair) {
     cell.appendChild(viewLabel);
   }
 
+  cell.appendChild(makeDragHandle());
+
   // Reveal only when images are ready at the final aspect ratio (no black square flash).
-  const wait = [whenImageReady(base)];
-  if (topImg) wait.push(whenImageReady(topImg));
-  cell._ic311Ready = Promise.all(wait).then(() => {
-    const ref = topImg && topImg.naturalWidth > 0 ? topImg : base;
-    if (ref.naturalWidth > 0 && ref.naturalHeight > 0) {
-      cell.style.aspectRatio = `${ref.naturalWidth} / ${ref.naturalHeight}`;
+  // Retry + concurrency limit avoids intermittent broken /view loads on fresh temp PNGs.
+  cell._ic311Ready = (async () => {
+    const baseData = hasBottom ? pair.bottom : pair.top;
+    const baseOk = await assignImageSrc(base, baseData);
+    let topOk = true;
+    if (topImg) {
+      topOk = await assignImageSrc(topImg, pair.top);
+      if (!topOk) {
+        // Keep bottom visible instead of browser broken-image chrome over the wipe.
+        clip?.remove();
+        cell.querySelector(".ic311-divider")?.remove();
+        topImg = null;
+        cell.style.cursor = "default";
+      }
     }
-    cell.classList.add("is-ready");
-    syncClipWidth(cell);
-  });
+
+    const ref = topImg && topImg.naturalWidth > 0 ? topImg : base;
+    if ((baseOk || topOk) && ref.naturalWidth > 0 && ref.naturalHeight > 0) {
+      cell.style.aspectRatio = `${ref.naturalWidth} / ${ref.naturalHeight}`;
+      cell.classList.add("is-ready");
+      syncClipWidth(cell);
+      return;
+    }
+
+    const msg = document.createElement("span");
+    msg.className = "ic311-unavailable-msg";
+    msg.textContent = "Unavailable";
+    cell.appendChild(msg);
+    cell.classList.add("is-ready", "is-unavailable");
+  })();
 
   return cell;
 }
@@ -531,7 +828,8 @@ function renderGrid(node) {
   if (!ui) return;
 
   const pairs = buildPairs(node._ic311Top, node._ic311Bottom);
-  const mode = node.properties?.ic311_mode === "Click" ? "Click" : "Slide";
+  const mode = normalizeMode(node.properties?.ic311_mode);
+  node.properties.ic311_mode = mode;
   const sig = pairsSignature(pairs);
 
   applyColumns(node);
@@ -560,6 +858,7 @@ function renderGrid(node) {
     cells.push(cell);
     ui.grid.appendChild(cell);
     bindCellMode(cell, mode);
+    bindDragHandle(cell, node);
   }
 
   // Show the whole grid together once every cell has its final aspect ratio.
@@ -575,18 +874,20 @@ function applyOverlays(node) {
   if (!ui) return;
   const show = node.properties?.ic311_show_overlays !== false;
   ui.root.classList.toggle("ic311-hide-overlays", !show);
-  if (ui.overlaysBtn) {
-    ui.overlaysBtn.textContent = show ? "Hide" : "Show";
-    ui.overlaysBtn.title = show
-      ? "Hide index and Top/Bot overlays"
-      : "Show index and Top/Bot overlays";
+  if (ui.overlaysToggle) {
+    ui.overlaysToggle.classList.toggle("is-on", show);
+    ui.overlaysToggle.setAttribute("aria-checked", show ? "true" : "false");
+    ui.overlaysToggle.title = show
+      ? "Overlays on (index + Top/Bot + drag handle)"
+      : "Overlays off";
   }
 }
 
 function syncToolbar(node) {
   const ui = node._ic311;
   if (!ui) return;
-  const mode = node.properties?.ic311_mode === "Click" ? "Click" : "Slide";
+  const mode = normalizeMode(node.properties?.ic311_mode);
+  node.properties.ic311_mode = mode;
   const cols = clampColumns(node.properties?.ic311_columns ?? 4);
 
   ui.modeSlide.classList.toggle("is-active", mode === "Slide");
@@ -600,6 +901,7 @@ function buildWidget(node) {
 
   if (!node.properties) node.properties = {};
   if (node.properties.ic311_mode == null) node.properties.ic311_mode = "Slide";
+  node.properties.ic311_mode = normalizeMode(node.properties.ic311_mode);
   if (node.properties.ic311_columns == null) node.properties.ic311_columns = 4;
   if (node.properties.ic311_show_overlays == null) node.properties.ic311_show_overlays = true;
   node.properties.ic311_columns = clampColumns(node.properties.ic311_columns);
@@ -617,11 +919,17 @@ function buildWidget(node) {
   const bar = document.createElement("div");
   bar.className = "ic311-actionbar";
 
-  const overlaysBtn = document.createElement("button");
-  overlaysBtn.className = "ic311-btn ic311-btn--ghost";
-  overlaysBtn.type = "button";
-  overlaysBtn.textContent = "Hide";
-  overlaysBtn.title = "Hide index and Top/Bot overlays";
+  const overlaysCtrl = document.createElement("div");
+  overlaysCtrl.className = "ic311-overlay-ctrl";
+  const overlaysLabel = document.createElement("span");
+  overlaysLabel.className = "ic311-overlay-label";
+  overlaysLabel.textContent = "Overlay";
+  const overlaysToggle = document.createElement("button");
+  overlaysToggle.className = "ic311-toggle";
+  overlaysToggle.type = "button";
+  overlaysToggle.setAttribute("role", "switch");
+  overlaysToggle.setAttribute("aria-label", "Toggle overlays");
+  overlaysCtrl.append(overlaysLabel, overlaysToggle);
 
   const spacer = document.createElement("div");
   spacer.className = "ic311-spacer";
@@ -630,13 +938,13 @@ function buildWidget(node) {
   modeSlide.className = "ic311-btn";
   modeSlide.type = "button";
   modeSlide.textContent = "Slide";
-  modeSlide.title = "Default: top only. Drag left to reveal bottom.";
+  modeSlide.title = "Hover to wipe between top and bottom.";
 
   const modeClick = document.createElement("button");
   modeClick.className = "ic311-btn";
   modeClick.type = "button";
   modeClick.textContent = "Click";
-  modeClick.title = "Shows top; hold click to reveal bottom.";
+  modeClick.title = "Shows top; hold to reveal bottom.";
 
   const colsWrap = document.createElement("div");
   colsWrap.className = "ic311-cols";
@@ -711,7 +1019,7 @@ function buildWidget(node) {
     nudgeCols(-1);
   });
 
-  overlaysBtn.addEventListener("click", (ev) => {
+  overlaysToggle.addEventListener("click", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     node.properties.ic311_show_overlays = !(node.properties.ic311_show_overlays !== false);
@@ -734,8 +1042,8 @@ function buildWidget(node) {
     applyMode(node);
   });
 
-  // Left: overlays + Col · Right: Slide / Click
-  bar.append(overlaysBtn, colsWrap, spacer, modeSlide, modeClick);
+  // Left: Overlay toggle + Col · Right: Slide / Click
+  bar.append(overlaysCtrl, colsWrap, spacer, modeSlide, modeClick);
   root.append(content, bar);
 
   node._ic311 = {
@@ -746,7 +1054,7 @@ function buildWidget(node) {
     modeSlide,
     modeClick,
     colsInput,
-    overlaysBtn,
+    overlaysToggle,
   };
 
   root.addEventListener("pointerdown", (ev) => ev.stopPropagation());
@@ -842,6 +1150,7 @@ app.registerExtension({
       }
       for (const cell of this._ic311?.grid?.querySelectorAll?.(".ic311-cell") || []) {
         cell._ic311Abort?.abort();
+        cell._ic311DragAbort?.abort();
       }
       if (onDestroy) onDestroy.apply(this, arguments);
     };

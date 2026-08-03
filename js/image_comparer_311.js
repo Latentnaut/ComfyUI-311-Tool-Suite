@@ -16,7 +16,7 @@ import { api } from "../../scripts/api.js";
 import { beginDragOut, makeDragHandleButton } from "./image_drag_out_311.js";
 
 const NODE_NAME = "ImageComparer311";
-const STYLE_ID = "image-comparer-311-n311-style-v9";
+const STYLE_ID = "image-comparer-311-n311-style-v10";
 const WIDGET_NAME = "ic311_ui";
 const MIN_HEIGHT = 180;
 const NODE_HEADER_H = 30;
@@ -30,11 +30,12 @@ const SLIDE_REST = 1;
 
 /** Cap parallel /view fetches — bursts of 16+ hit browser/server races on fresh temp PNGs. */
 const LOAD_CONCURRENCY = 4;
-const LOAD_ATTEMPTS = [
-  { preview: true, delayMs: 0 },
-  { preview: false, delayMs: 100 },
-  { preview: false, delayMs: 250 },
-];
+/**
+ * Retry backoff. The first requests land while the server is still finishing the
+ * workflow, so they can stall for seconds; short retries all fail inside that window.
+ */
+const LOAD_RETRY_DELAYS_MS = [0, 400, 1200, 3000, 8000];
+const LOAD_TIMEOUT_MS = 30000;
 
 let _loadActive = 0;
 const _loadQueue = [];
@@ -64,29 +65,21 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function appendQuery(url, fragment) {
-  if (!fragment) return url;
-  const f = String(fragment);
-  if (f.startsWith("&") || f.startsWith("?")) return url + f.replace(/^\?/, "&");
-  return `${url}&${f}`;
-}
-
-function imgURL(d, { preview = true, bust = true } = {}) {
+/**
+ * Plain PNG, no `preview=webp`: that makes the server re-encode through PIL on the
+ * request thread, which is what stalls the first batch while a workflow is running.
+ */
+function imgURL(d) {
   if (!d?.filename) return "";
   const p = new URLSearchParams();
   p.set("filename", d.filename);
   if (d.subfolder) p.set("subfolder", d.subfolder);
   p.set("type", d.type || "temp");
-  let url = api.apiURL(`/view?${p}`);
-  if (preview) url = appendQuery(url, app.getPreviewFormatParam?.() || "");
-  if (bust) {
-    const rand = app.getRandParam?.() || `&rand=${Math.random()}`;
-    url = appendQuery(url, rand);
-  }
-  return url;
+  p.set("rand", String(Math.random()));
+  return api.apiURL(`/view?${p}`);
 }
 
-function waitLoadOrError(img, timeoutMs = 12000) {
+function waitLoadOrError(img, timeoutMs = LOAD_TIMEOUT_MS) {
   return new Promise((resolve) => {
     if (img.complete && img.naturalWidth > 0) {
       resolve(true);
@@ -109,22 +102,23 @@ function waitLoadOrError(img, timeoutMs = 12000) {
   });
 }
 
-/** Load a temp preview with retries (plain PNG fallback). Never leave browser broken-image chrome. */
+/** Load a temp image with backoff retries. Never leave browser broken-image chrome. */
 async function assignImageSrc(img, data) {
   if (!img || !data?.filename) return false;
   img.alt = "";
   img.decoding = "async";
 
-  for (const attempt of LOAD_ATTEMPTS) {
-    if (attempt.delayMs) await sleep(attempt.delayMs);
+  for (const delayMs of LOAD_RETRY_DELAYS_MS) {
+    if (delayMs) await sleep(delayMs);
     const ok = await enqueueLoad(async () => {
-      img.src = imgURL(data, { preview: attempt.preview, bust: true });
+      img.src = imgURL(data);
       return waitLoadOrError(img);
     });
     if (ok) return true;
   }
 
   img.removeAttribute("src");
+  console.warn("[Image Comparer 311] could not load", data.filename);
   return false;
 }
 
@@ -146,6 +140,7 @@ function injectStyles() {
   document.getElementById("image-comparer-311-n311-style-v6")?.remove();
   document.getElementById("image-comparer-311-n311-style-v7")?.remove();
   document.getElementById("image-comparer-311-n311-style-v8")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v9")?.remove();
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -211,20 +206,26 @@ function injectStyles() {
       display: flex;
       align-items: center;
       justify-content: center;
-      cursor: default;
+      cursor: pointer;
       min-height: 64px;
       aspect-ratio: 1;
     }
+    .ic311-cell.is-unavailable:hover { border-color: var(--n311-accent-dim, #5a7abf); }
     .ic311-cell.is-unavailable .ic311-layer,
     .ic311-cell.is-unavailable .ic311-top-clip,
-    .ic311-cell.is-unavailable .ic311-divider {
+    .ic311-cell.is-unavailable .ic311-divider,
+    .ic311-cell.is-top-missing .ic311-top-clip,
+    .ic311-cell.is-top-missing .ic311-divider {
       display: none;
     }
     .ic311-unavailable-msg {
       color: var(--n311-text-dim, #888);
       font-size: 10px;
+      text-align: center;
+      line-height: 1.5;
       pointer-events: none;
     }
+    .ic311-cell.is-loading .ic311-unavailable-msg { opacity: 0.6; }
 
     .ic311-layer {
       position: absolute;
@@ -554,7 +555,7 @@ function bindCellMode(cell, mode) {
   cell._ic311Down = false;
   cell._ic311Mode = mode;
 
-  const hasWipe = !!cell.querySelector(".ic311-top-clip");
+  const hasWipe = !!cell.querySelector(".ic311-top-clip") && !cell.classList.contains("is-top-missing");
   if (!hasWipe) {
     cell.style.cursor = "default";
     return;
@@ -731,7 +732,7 @@ function applyColumns(node) {
   });
 }
 
-function buildCell(pair) {
+function buildCell(pair, node) {
   const cell = document.createElement("div");
   cell.className = "ic311-cell";
   cell.dataset.index = String(pair.index);
@@ -740,7 +741,6 @@ function buildCell(pair) {
 
   const hasTop = !!pair.top;
   const hasBottom = !!pair.bottom;
-  if (hasTop) cell.classList.add("has-top");
 
   // Base layer = bottom (underneath). Fall back to top when only one side.
   const base = document.createElement("img");
@@ -750,9 +750,8 @@ function buildCell(pair) {
   cell.appendChild(base);
 
   let topImg = null;
-  let clip = null;
   if (hasTop && hasBottom) {
-    clip = document.createElement("div");
+    const clip = document.createElement("div");
     clip.className = "ic311-top-clip";
     topImg = document.createElement("img");
     topImg.className = "ic311-layer";
@@ -782,39 +781,61 @@ function buildCell(pair) {
 
   cell.appendChild(makeDragHandle());
 
+  cell._ic311Base = base;
+  cell._ic311TopImg = topImg;
+
   // Reveal only when images are ready at the final aspect ratio (no black square flash).
   // Retry + concurrency limit avoids intermittent broken /view loads on fresh temp PNGs.
-  cell._ic311Ready = (async () => {
-    const baseData = hasBottom ? pair.bottom : pair.top;
-    const baseOk = await assignImageSrc(base, baseData);
-    let topOk = true;
-    if (topImg) {
-      topOk = await assignImageSrc(topImg, pair.top);
-      if (!topOk) {
-        // Keep bottom visible instead of browser broken-image chrome over the wipe.
-        clip?.remove();
-        cell.querySelector(".ic311-divider")?.remove();
-        topImg = null;
-        cell.style.cursor = "default";
-      }
-    }
-
-    const ref = topImg && topImg.naturalWidth > 0 ? topImg : base;
-    if ((baseOk || topOk) && ref.naturalWidth > 0 && ref.naturalHeight > 0) {
-      cell.style.aspectRatio = `${ref.naturalWidth} / ${ref.naturalHeight}`;
-      cell.classList.add("is-ready");
-      syncClipWidth(cell);
-      return;
-    }
-
-    const msg = document.createElement("span");
-    msg.className = "ic311-unavailable-msg";
-    msg.textContent = "Unavailable";
-    cell.appendChild(msg);
-    cell.classList.add("is-ready", "is-unavailable");
-  })();
+  cell._ic311Ready = loadCellImages(cell, node);
 
   return cell;
+}
+
+/** Load both layers, then either reveal the cell or offer a manual retry. */
+async function loadCellImages(cell, node) {
+  if (cell._ic311Loading) return;
+  cell._ic311Loading = true;
+
+  const pair = cell._ic311Pair;
+  const base = cell._ic311Base;
+  const topImg = cell._ic311TopImg;
+  cell.querySelector(".ic311-unavailable-msg")?.remove();
+  cell.classList.remove("is-unavailable");
+
+  const baseOk = await assignImageSrc(base, pair.bottom || pair.top);
+  let topOk = false;
+  if (topImg) topOk = await assignImageSrc(topImg, pair.top);
+
+  cell._ic311Loading = false;
+
+  // Keep the bottom usable on its own when only the top layer failed.
+  cell.classList.toggle("is-top-missing", !!topImg && !topOk);
+  cell.classList.toggle("has-top", topImg ? topOk : baseOk && !pair.bottom);
+
+  const ref = topOk ? topImg : base;
+  if (ref.naturalWidth > 0 && ref.naturalHeight > 0) {
+    cell.style.aspectRatio = `${ref.naturalWidth} / ${ref.naturalHeight}`;
+    cell.classList.add("is-ready");
+    bindCellMode(cell, normalizeMode(node?.properties?.ic311_mode));
+    bindDragHandle(cell, node);
+    syncClipWidth(cell);
+    return;
+  }
+
+  const msg = document.createElement("span");
+  msg.className = "ic311-unavailable-msg";
+  msg.textContent = "Unavailable\nclick to retry";
+  msg.style.whiteSpace = "pre-line";
+  cell.appendChild(msg);
+  cell.classList.add("is-ready", "is-unavailable");
+  cell.addEventListener(
+    "click",
+    () => {
+      cell.classList.add("is-loading");
+      loadCellImages(cell, node).finally(() => cell.classList.remove("is-loading"));
+    },
+    { once: true }
+  );
 }
 
 function pairsSignature(pairs) {
@@ -854,7 +875,7 @@ function renderGrid(node) {
   ui.content.replaceChildren(ui.grid);
   const cells = [];
   for (const pair of pairs) {
-    const cell = buildCell(pair);
+    const cell = buildCell(pair, node);
     cells.push(cell);
     ui.grid.appendChild(cell);
     bindCellMode(cell, mode);

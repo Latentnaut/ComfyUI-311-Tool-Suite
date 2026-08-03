@@ -73,25 +73,44 @@ export function makeDragHandleButton({
 
 /**
  * Node-local rect for the drag handle on a canvas Preview strip.
- * Grid: bottom-right of the hovered cell (`imageRects` + `overIndex`).
- * Focused: bottom-right of `_p311FocusRect` (set while drawing).
+ * Grid mode: bottom-right of the cell containing localX, localY.
+ * Focused mode: bottom-right of the single _p311FocusRect.
  */
-export function getPreviewDragHandleRect(node) {
+export function getPreviewDragHandleRect(node, localX, localY) {
   const size = DRAG_HANDLE_SIZE;
   const pad = DRAG_HANDLE_PAD;
-  if (
-    node.imageIndex == null &&
-    typeof node.overIndex === "number" &&
-    Array.isArray(node.imageRects?.[node.overIndex])
-  ) {
-    const [rx, ry, rw, rh] = node.imageRects[node.overIndex];
-    return {
-      x: rx + rw - size - pad,
-      y: ry + rh - size - pad,
-      w: size,
-      h: size,
-    };
+
+  // Grid mode (imageIndex is null/undefined)
+  if (node.imageIndex == null) {
+    if (typeof localX === "number" && typeof localY === "number" && Array.isArray(node.imageRects)) {
+      for (let i = 0; i < node.imageRects.length; i++) {
+        const r = node.imageRects[i];
+        if (r && localX >= r[0] && localX <= r[0] + r[2] && localY >= r[1] && localY <= r[1] + r[3]) {
+          return {
+            x: r[0] + r[2] - size - pad,
+            y: r[1] + r[3] - size - pad,
+            w: size,
+            h: size,
+            index: i,
+          };
+        }
+      }
+    }
+    // Fallback to overIndex if mouse move hasn't updated local coords yet
+    if (typeof node.overIndex === "number" && Array.isArray(node.imageRects?.[node.overIndex])) {
+      const [rx, ry, rw, rh] = node.imageRects[node.overIndex];
+      return {
+        x: rx + rw - size - pad,
+        y: ry + rh - size - pad,
+        w: size,
+        h: size,
+        index: node.overIndex,
+      };
+    }
+    return null;
   }
+
+  // Focused mode (imageIndex is a number)
   if (Array.isArray(node._p311FocusRect)) {
     const [rx, ry, rw, rh] = node._p311FocusRect;
     return {
@@ -99,13 +118,15 @@ export function getPreviewDragHandleRect(node) {
       y: ry + rh - size - pad,
       w: size,
       h: size,
+      index: node.imageIndex,
     };
   }
+
   return null;
 }
 
 export function hitPreviewDragHandle(node, localX, localY) {
-  const r = getPreviewDragHandleRect(node);
+  const r = getPreviewDragHandleRect(node, localX, localY);
   if (!r) return false;
   return localX >= r.x && localX <= r.x + r.w && localY >= r.y && localY <= r.y + r.h;
 }

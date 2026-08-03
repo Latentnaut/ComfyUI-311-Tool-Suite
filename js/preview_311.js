@@ -24,6 +24,10 @@ import {
   drawDragHandle,
 } from "./image_drag_out_311.js";
 
+function getImages(node) {
+  return node._p311Images || node.images || [];
+}
+
 function imageAreaTop(node) {
   return node.widgets?.length
     ? (node.widgets[node.widgets.length - 1].last_y ?? 30) + 20
@@ -31,7 +35,7 @@ function imageAreaTop(node) {
 }
 
 function isInImageArea(node, localY) {
-  if (!node._p311Images?.length) return false;
+  if (!getImages(node).length) return false;
   return localY > imageAreaTop(node);
 }
 
@@ -80,19 +84,14 @@ app.registerExtension({
       }
     };
 
-    // Only block node-move when pressing the drag grip.
+    // Prevent LiteGraph node-move when pressing in the image area.
     const origMouseDown = nodeType.prototype.onMouseDown;
     nodeType.prototype.onMouseDown = function (e, localPos) {
-      const x =
-        localPos?.[0] ??
-        localPos?.x ??
-        (e.canvasX !== undefined ? e.canvasX - this.pos[0] : e.offsetX);
       const y =
         localPos?.[1] ??
         localPos?.y ??
         (e.canvasY !== undefined ? e.canvasY - this.pos[1] : e.offsetY);
-      updateFocusRect(this);
-      if (hitPreviewDragHandle(this, x, y)) return true;
+      if (isInImageArea(this, y)) return true;
       if (origMouseDown) return origMouseDown.apply(this, arguments);
     };
 
@@ -106,6 +105,7 @@ app.registerExtension({
         localPos?.[1] ??
         localPos?.y ??
         (e.canvasY !== undefined ? e.canvasY - this.pos[1] : e.offsetY);
+      this._p311LastMousePos = [x, y];
       updateFocusRect(this);
       const hot = hitPreviewDragHandle(this, x, y);
       if (this._p311HandleHot !== hot) {
@@ -119,14 +119,15 @@ app.registerExtension({
     nodeType.prototype.getExtraMenuOptions = function (_, options) {
       if (origGetExtraMenuOptions) origGetExtraMenuOptions.apply(this, arguments);
 
-      if (this._p311Images?.length) {
+      const images = getImages(this);
+      if (images.length) {
         const node = this;
         options.unshift({
           content: "Send to input folder",
           callback: async () => {
             try {
               const idx = resolvePreviewImageIndex(node);
-              const imgData = node._p311Images[idx];
+              const imgData = images[idx];
               const result = await sendToInputFolder(imgData, "preview311");
               alert(`Image sent to input folder:\n${result.name}`);
             } catch (err) {
@@ -142,17 +143,18 @@ app.registerExtension({
     const origDraw = nodeType.prototype.onDrawForeground;
     nodeType.prototype.onDrawForeground = function (ctx) {
       if (origDraw) origDraw.apply(this, arguments);
-      if (!this._p311Images?.length || !this.imgs?.length) return;
+      const images = getImages(this);
+      if (!images.length || !this.imgs?.length) return;
 
       updateFocusRect(this);
 
-      // Grid: only while a cell is hovered. Focused: while pointer is over the node.
-      const show =
-        (this.imageIndex == null && typeof this.overIndex === "number") ||
-        (typeof this.imageIndex === "number" && this._p311Hovering);
-      if (!show) return;
+      // Only while pointer is over the node.
+      if (!this._p311Hovering) return;
 
-      const rect = getPreviewDragHandleRect(this);
+      const mx = this._p311LastMousePos?.[0];
+      const my = this._p311LastMousePos?.[1];
+
+      const rect = getPreviewDragHandleRect(this, mx, my);
       if (!rect) return;
       drawDragHandle(ctx, rect.x, rect.y, { hot: !!this._p311HandleHot });
     };
@@ -165,6 +167,7 @@ app.registerExtension({
     const origMouseLeave = nodeType.prototype.onMouseLeave;
     nodeType.prototype.onMouseLeave = function () {
       this._p311Hovering = false;
+      this._p311LastMousePos = null;
       this._p311HandleHot = false;
       if (origMouseLeave) return origMouseLeave.apply(this, arguments);
     };
@@ -185,17 +188,20 @@ app.registerExtension({
         const pos = gc.convertEventToCanvasOffset(e);
         const node = gc.graph.getNodeOnPos(pos[0], pos[1], app.graph._nodes);
         if (!node || node.type !== "Preview311") return;
-        if (!node._p311Images?.length) return;
+        const images = getImages(node);
+        if (!images.length) return;
 
         const localX = pos[0] - node.pos[0];
         const localY = pos[1] - node.pos[1];
         if (!isInImageArea(node, localY)) return;
 
         updateFocusRect(node);
-        if (!hitPreviewDragHandle(node, localX, localY)) return;
+        const rect = getPreviewDragHandleRect(node, localX, localY);
+        if (!rect) return;
+        if (localX < rect.x || localX > rect.x + rect.w || localY < rect.y || localY > rect.y + rect.h) return;
 
-        const idx = resolvePreviewImageIndex(node);
-        const imgData = node._p311Images[idx];
+        const idx = rect.index;
+        const imgData = images[idx];
         if (!imgData) return;
 
         if (!node.flags) node.flags = {};

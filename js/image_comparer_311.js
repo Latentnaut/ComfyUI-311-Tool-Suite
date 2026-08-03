@@ -147,20 +147,15 @@ function normalizeImageRefs(list) {
   return out;
 }
 
-/**
- * Persist durable (output/) refs for Comfy reload.
- * Session display may use temp; properties keep the output copies.
- */
-function persistImages(node, topPersist, bottomPersist) {
+/** Persist last-run temp refs into node.properties (tab switch / same session). */
+function persistImages(node) {
   if (!node) return;
   if (!node.properties) node.properties = {};
-  const top = normalizeImageRefs(topPersist?.length ? topPersist : node._ic311Top);
-  const bottom = normalizeImageRefs(bottomPersist?.length ? bottomPersist : node._ic311Bottom);
-  node.properties.ic311_top_images = top;
-  node.properties.ic311_bottom_images = bottom;
+  node.properties.ic311_top_images = normalizeImageRefs(node._ic311Top);
+  node.properties.ic311_bottom_images = normalizeImageRefs(node._ic311Bottom);
 }
 
-/** Restore image refs from properties into runtime fields (output/ after reload). */
+/** Restore image refs from properties into runtime fields. */
 function restoreImages(node) {
   if (!node) return false;
   const top = normalizeImageRefs(node.properties?.ic311_top_images);
@@ -1588,11 +1583,9 @@ app.registerExtension({
     const onExecuted = nodeType.prototype.onExecuted;
     nodeType.prototype.onExecuted = function (output) {
       if (onExecuted) onExecuted.apply(this, arguments);
-      // Live grid: temp refs (normal Comfy preview path).
       this._ic311Top = normalizeImageRefs(output?.top_images);
       this._ic311Bottom = normalizeImageRefs(output?.bottom_images);
-      // Workflow properties: output/ copies so reload can restore after temp wipe.
-      persistImages(this, output?.top_images_persist, output?.bottom_images_persist);
+      persistImages(this);
       clearNodeImagePreview(this);
       renderGrid(this);
       syncToolbar(this);

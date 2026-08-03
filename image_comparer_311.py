@@ -7,9 +7,9 @@ picking a single pair from the batch.
 
 image_top is the new image overlaid on image_bottom (the base).
 
-Preview files go to temp (normal Comfy preview path). A flat copy is also
-written to the standard output/ folder (no special subfolder) so the
-frontend can restore the last run after a Comfy reload.
+Previews save to temp only (same as other Comfy preview nodes). The frontend
+keeps refs in node.properties so tab switches can restore the grid while
+those temp files still exist.
 
 Part of the 311 Tool Suite (V3 API).
 """
@@ -22,30 +22,18 @@ from comfy_api.latest import io, ui
 
 
 def _save_batch(images, prefix: str, cls: type[io.ComfyNode]):
-    """Save to temp (session) and output (reload). Return (temp_refs, output_refs)."""
+    """Save a batch to temp and return the SavedResult list."""
     if images is None or len(images) == 0:
-        return [], []
-    rand = "".join(random.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(5))
-    name = f"{prefix}_{rand}"
-
+        return []
     os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
-    temp_refs = ui.ImageSaveHelper.save_images(
+    rand = "".join(random.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(5))
+    return ui.ImageSaveHelper.save_images(
         images,
-        filename_prefix=f"{name}_",
+        filename_prefix=f"{prefix}_{rand}_",
         folder_type=io.FolderType.temp,
         cls=cls,
         compress_level=1,
     )
-
-    os.makedirs(folder_paths.get_output_directory(), exist_ok=True)
-    output_refs = ui.ImageSaveHelper.save_images(
-        images,
-        filename_prefix=name,
-        folder_type=io.FolderType.output,
-        cls=cls,
-        compress_level=4,
-    )
-    return temp_refs, output_refs
 
 
 class ImageComparer311(io.ComfyNode):
@@ -60,7 +48,7 @@ class ImageComparer311(io.ComfyNode):
                 "image_top is the overlay on image_bottom (base). "
                 "With Overlay on, a 9-dot handle drags image_top to other nodes. "
                 "Length-1 inputs broadcast. "
-                "Previews use temp; a copy in output/ restores the grid after Comfy reload."
+                "Previews stay in temp; workflow refs restore the grid across tabs."
             ),
             search_aliases=[
                 "image comparer", "compare", "slider", "before after",
@@ -87,13 +75,6 @@ class ImageComparer311(io.ComfyNode):
 
     @classmethod
     def execute(cls, image_top=None, image_bottom=None) -> io.NodeOutput:
-        top_temp, top_out = _save_batch(image_top, "Comparer311_top", cls)
-        bot_temp, bot_out = _save_batch(image_bottom, "Comparer311_bot", cls)
-        return io.NodeOutput(
-            ui={
-                "top_images": top_temp,
-                "bottom_images": bot_temp,
-                "top_images_persist": top_out,
-                "bottom_images_persist": bot_out,
-            }
-        )
+        top_images = _save_batch(image_top, "comparer311_top", cls)
+        bottom_images = _save_batch(image_bottom, "comparer311_bot", cls)
+        return io.NodeOutput(ui={"top_images": top_images, "bottom_images": bottom_images})

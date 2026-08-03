@@ -7,6 +7,10 @@ picking a single pair from the batch.
 
 image_top is the new image overlaid on image_bottom (the base).
 
+Preview files go to temp (normal Comfy preview path). A flat copy is also
+written to the standard output/ folder (no special subfolder) so the
+frontend can restore the last run after a Comfy reload.
+
 Part of the 311 Tool Suite (V3 API).
 """
 
@@ -18,18 +22,30 @@ from comfy_api.latest import io, ui
 
 
 def _save_batch(images, prefix: str, cls: type[io.ComfyNode]):
-    """Save a batch to temp and return the SavedResult list."""
+    """Save to temp (session) and output (reload). Return (temp_refs, output_refs)."""
     if images is None or len(images) == 0:
-        return []
-    os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
+        return [], []
     rand = "".join(random.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(5))
-    return ui.ImageSaveHelper.save_images(
+    name = f"{prefix}_{rand}"
+
+    os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
+    temp_refs = ui.ImageSaveHelper.save_images(
         images,
-        filename_prefix=f"{prefix}_{rand}_",
+        filename_prefix=f"{name}_",
         folder_type=io.FolderType.temp,
         cls=cls,
         compress_level=1,
     )
+
+    os.makedirs(folder_paths.get_output_directory(), exist_ok=True)
+    output_refs = ui.ImageSaveHelper.save_images(
+        images,
+        filename_prefix=name,
+        folder_type=io.FolderType.output,
+        cls=cls,
+        compress_level=4,
+    )
+    return temp_refs, output_refs
 
 
 class ImageComparer311(io.ComfyNode):
@@ -44,7 +60,7 @@ class ImageComparer311(io.ComfyNode):
                 "image_top is the overlay on image_bottom (base). "
                 "With Overlay on, a 9-dot handle drags image_top to other nodes. "
                 "Length-1 inputs broadcast. "
-                "Last-run preview refs persist in the workflow while temp files remain."
+                "Previews use temp; a copy in output/ restores the grid after Comfy reload."
             ),
             search_aliases=[
                 "image comparer", "compare", "slider", "before after",
@@ -71,6 +87,13 @@ class ImageComparer311(io.ComfyNode):
 
     @classmethod
     def execute(cls, image_top=None, image_bottom=None) -> io.NodeOutput:
-        top_images = _save_batch(image_top, "comparer311_top", cls)
-        bottom_images = _save_batch(image_bottom, "comparer311_bot", cls)
-        return io.NodeOutput(ui={"top_images": top_images, "bottom_images": bottom_images})
+        top_temp, top_out = _save_batch(image_top, "Comparer311_top", cls)
+        bot_temp, bot_out = _save_batch(image_bottom, "Comparer311_bot", cls)
+        return io.NodeOutput(
+            ui={
+                "top_images": top_temp,
+                "bottom_images": bot_temp,
+                "top_images_persist": top_out,
+                "bottom_images_persist": bot_out,
+            }
+        )

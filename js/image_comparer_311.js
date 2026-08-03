@@ -7,6 +7,7 @@
  * Layering: bottom is the base; top is the overlay wipe from the left.
  * Slide: hover wipe. Click: hold for bottom.
  * Overlay on: 9-dot handle (bottom-right) arms drag-out of image_top.
+ * Double-click a cell: fullscreen pair viewer (Slide/Click, arrows, Ctrl+C, Esc).
  *
  * Spec: docs/UI_DESIGN_SYSTEM.md (n311 tokens + DOM widget shell)
  */
@@ -16,7 +17,7 @@ import { api } from "../../scripts/api.js";
 import { beginDragOut, makeDragHandleButton } from "./image_drag_out_311.js";
 
 const NODE_NAME = "ImageComparer311";
-const STYLE_ID = "image-comparer-311-n311-style-v10";
+const STYLE_ID = "image-comparer-311-n311-style-v11";
 const WIDGET_NAME = "ic311_ui";
 const MIN_HEIGHT = 180;
 const NODE_HEADER_H = 30;
@@ -141,6 +142,7 @@ function injectStyles() {
   document.getElementById("image-comparer-311-n311-style-v7")?.remove();
   document.getElementById("image-comparer-311-n311-style-v8")?.remove();
   document.getElementById("image-comparer-311-n311-style-v9")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v10")?.remove();
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -456,8 +458,390 @@ function injectStyles() {
       display: flex; align-items: center; justify-content: center;
     }
     .ic311-cols-arrow:hover { color: #666; background: rgba(255,255,255,0.03); }
+
+    .ic311-fs-backdrop {
+      position: fixed; inset: 0;
+      background: var(--n311-scrim, rgba(0,0,0,0.8));
+      z-index: 99999;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+      font-family: var(--n311-font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+    }
+    .ic311-fs-panel {
+      width: clamp(700px, 90vw, 1920px);
+      height: clamp(480px, 88vh, 1200px);
+      max-width: 100%;
+      max-height: 100%;
+      background: var(--n311-bg-modal, #181818);
+      border: 1px solid var(--n311-border, #333);
+      border-radius: 12px;
+      box-shadow: var(--n311-shadow-modal, 0 24px 80px rgba(0,0,0,0.8));
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      position: relative;
+      box-sizing: border-box;
+    }
+    .ic311-fs-meta {
+      position: absolute; top: 10px; left: 12px; z-index: 5;
+      background: rgba(0,0,0,0.55); color: #e0e0e0;
+      font-size: 12px; font-weight: bold;
+      padding: 4px 8px; border-radius: 4px;
+      border: 1px solid transparent;
+      pointer-events: none;
+      user-select: none;
+    }
+    @keyframes ic311-action-ok-flash {
+      0%   { color: #44cc88; border-color: #44cc88; background: #1a3a28; }
+      100% { color: #e0e0e0; border-color: transparent; background: rgba(0,0,0,0.55); }
+    }
+    .ic311-fs-meta.ic311-action-ok {
+      animation: ic311-action-ok-flash 0.6s ease-out forwards;
+    }
+    .ic311-fs-stage {
+      flex: 1; min-height: 0;
+      position: relative;
+      width: 100%;
+      border: none;
+      border-radius: 0;
+      background: var(--n311-bg-deep, #111);
+      opacity: 1;
+      pointer-events: auto;
+      cursor: ew-resize;
+      user-select: none;
+      overflow: hidden;
+      transform: translate3d(0, 0, 0);
+      backface-visibility: hidden;
+    }
+    .ic311-fs-stage .ic311-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: transparent;
+      pointer-events: none;
+      display: block;
+    }
+    .ic311-fs-stage .ic311-top-clip {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 100%;
+      overflow: hidden;
+      pointer-events: none;
+      will-change: width;
+    }
+    .ic311-fs-stage .ic311-top-clip .ic311-layer {
+      position: absolute;
+      left: 0; top: 0;
+      width: var(--ic311-full-w, 100%);
+      height: 100%;
+      max-width: none;
+    }
+    .ic311-fs-stage .ic311-divider {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 0;
+      left: 100%;
+      border-left: 1px solid rgba(255,255,255,0.95);
+      mix-blend-mode: difference;
+      pointer-events: none;
+      z-index: 2;
+      will-change: left;
+    }
+    .ic311-fs-stage .ic311-view-label {
+      position: absolute; top: 10px; right: 12px;
+      background: rgba(0,0,0,0.55); color: #e0e0e0;
+      font-size: 12px; font-weight: bold;
+      padding: 4px 8px; border-radius: 4px;
+      pointer-events: none; z-index: 3;
+    }
+    .ic311-fs-stage.is-unavailable {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: default;
+    }
+    .ic311-fs-stage.is-unavailable .ic311-layer,
+    .ic311-fs-stage.is-unavailable .ic311-top-clip,
+    .ic311-fs-stage.is-unavailable .ic311-divider,
+    .ic311-fs-stage.is-top-missing .ic311-top-clip,
+    .ic311-fs-stage.is-top-missing .ic311-divider {
+      display: none;
+    }
   `;
   document.head.appendChild(style);
+}
+
+/** Singleton fullscreen overlay state. */
+let _fs = null;
+
+function flashActionOk(el) {
+  if (!el) return;
+  el.classList.remove("ic311-action-ok");
+  void el.offsetWidth;
+  el.classList.add("ic311-action-ok");
+  clearTimeout(el._okFlashTimer);
+  el._okFlashTimer = setTimeout(() => el.classList.remove("ic311-action-ok"), 650);
+}
+
+function closeFullscreen() {
+  if (!_fs) return;
+  _fs.abort?.abort();
+  _fs.stage?._ic311Abort?.abort();
+  _fs.backdrop?.remove();
+  _fs = null;
+}
+
+function visibleFsImage(stage) {
+  if (!stage) return null;
+  const ratio = stage._ic311Ratio ?? 1;
+  const topImg = stage._ic311TopImg;
+  const base = stage._ic311Base;
+  if (ratio >= 0.5) {
+    if (topImg?.naturalWidth > 0) return topImg;
+    if (base?.naturalWidth > 0) return base;
+  } else if (base?.naturalWidth > 0) {
+    return base;
+  } else if (topImg?.naturalWidth > 0) {
+    return topImg;
+  }
+  return null;
+}
+
+async function copyImgToClipboard(img) {
+  if (!img?.naturalWidth || !img.naturalHeight) return false;
+  if (!navigator.clipboard?.write || !window.ClipboardItem) return false;
+  const c = document.createElement("canvas");
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  c.getContext("2d").drawImage(img, 0, 0);
+  const png = await new Promise((resolve, reject) => {
+    c.toBlob((b) => (b ? resolve(b) : reject(new Error("PNG encode failed"))), "image/png");
+  });
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({ "image/png": Promise.resolve(png) }),
+    ]);
+    return true;
+  } catch {
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+    return true;
+  }
+}
+
+async function copyFsVisible() {
+  if (!_fs?.stage) return;
+  const img = visibleFsImage(_fs.stage);
+  if (!img) return;
+  try {
+    const ok = await copyImgToClipboard(img);
+    if (ok) flashActionOk(_fs.meta);
+  } catch (err) {
+    console.warn("[Image Comparer 311] clipboard copy failed", err);
+  }
+}
+
+function tryHydrateFromGrid(node, pair, base, topImg) {
+  const cell = node?._ic311?.grid?.querySelector?.(`.ic311-cell[data-index="${pair.index}"]`);
+  if (!cell?.classList?.contains("is-ready") || cell.classList.contains("is-unavailable")) {
+    return false;
+  }
+  const gBase = cell._ic311Base;
+  const gTop = cell._ic311TopImg;
+  let ok = false;
+  if (gBase?.src && gBase.naturalWidth > 0) {
+    base.src = gBase.currentSrc || gBase.src;
+    ok = true;
+  }
+  if (topImg && gTop?.src && gTop.naturalWidth > 0) {
+    topImg.src = gTop.currentSrc || gTop.src;
+    ok = true;
+  }
+  return ok && base.complete && base.naturalWidth > 0 && (!topImg || (topImg.complete && topImg.naturalWidth > 0));
+}
+
+function buildFsStage(pair) {
+  const stage = document.createElement("div");
+  stage.className = "ic311-fs-stage";
+  stage._ic311Pair = pair;
+  stage._ic311Ratio = 1;
+
+  const hasTop = !!pair.top;
+  const hasBottom = !!pair.bottom;
+
+  const base = document.createElement("img");
+  base.className = "ic311-layer";
+  base.draggable = false;
+  base.alt = "";
+  stage.appendChild(base);
+
+  let topImg = null;
+  if (hasTop && hasBottom) {
+    const clip = document.createElement("div");
+    clip.className = "ic311-top-clip";
+    topImg = document.createElement("img");
+    topImg.className = "ic311-layer";
+    topImg.draggable = false;
+    topImg.alt = "";
+    clip.appendChild(topImg);
+    stage.appendChild(clip);
+
+    const divider = document.createElement("div");
+    divider.className = "ic311-divider";
+    stage.appendChild(divider);
+  } else {
+    stage.style.cursor = "default";
+  }
+
+  const viewLabel = document.createElement("span");
+  viewLabel.className = "ic311-view-label";
+  viewLabel.textContent = hasTop ? "Top" : "Bot";
+  stage.appendChild(viewLabel);
+
+  stage._ic311Base = base;
+  stage._ic311TopImg = topImg;
+  return stage;
+}
+
+async function loadFsStage(stage, node) {
+  const pair = stage._ic311Pair;
+  const base = stage._ic311Base;
+  const topImg = stage._ic311TopImg;
+  stage.querySelector(".ic311-unavailable-msg")?.remove();
+  stage.classList.remove("is-unavailable", "is-top-missing");
+
+  let hydrated = tryHydrateFromGrid(node, pair, base, topImg);
+  if (!hydrated) {
+    const baseOk = await assignImageSrc(base, pair.bottom || pair.top);
+    let topOk = false;
+    if (topImg) topOk = await assignImageSrc(topImg, pair.top);
+    stage.classList.toggle("is-top-missing", !!topImg && !topOk);
+    if (!(baseOk || topOk)) {
+      const msg = document.createElement("span");
+      msg.className = "ic311-unavailable-msg";
+      msg.textContent = "Unavailable";
+      stage.appendChild(msg);
+      stage.classList.add("is-unavailable");
+      stage.style.cursor = "default";
+      return;
+    }
+  } else if (topImg && !(topImg.naturalWidth > 0)) {
+    stage.classList.add("is-top-missing");
+  }
+
+  bindCellMode(stage, normalizeMode(node?.properties?.ic311_mode));
+  requestAnimationFrame(() => {
+    if (_fs?.stage !== stage) return;
+    stage._cachedRect = stage.getBoundingClientRect();
+    syncClipWidth(stage);
+  });
+}
+
+function showFsPair(index) {
+  if (!_fs) return;
+  const pairs = _fs.pairs;
+  if (!pairs.length) {
+    closeFullscreen();
+    return;
+  }
+  const idx = ((index % pairs.length) + pairs.length) % pairs.length;
+  _fs.index = idx;
+  _fs.meta.textContent = `${idx + 1} / ${pairs.length}`;
+
+  _fs.stage?._ic311Abort?.abort();
+  const stage = buildFsStage(pairs[idx]);
+  _fs.panel.replaceChildren(_fs.meta, stage);
+  _fs.stage = stage;
+  loadFsStage(stage, _fs.node);
+}
+
+function openFullscreen(node, index) {
+  const pairs = buildPairs(node._ic311Top, node._ic311Bottom);
+  if (!pairs.length) return;
+
+  closeFullscreen();
+  injectStyles();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "ic311-fs-backdrop";
+
+  const panel = document.createElement("div");
+  panel.className = "ic311-fs-panel";
+
+  const meta = document.createElement("div");
+  meta.className = "ic311-fs-meta";
+
+  panel.appendChild(meta);
+  backdrop.appendChild(panel);
+  document.body.appendChild(backdrop);
+
+  const abort = new AbortController();
+  const opts = { signal: abort.signal, capture: true };
+
+  backdrop.addEventListener(
+    "pointerdown",
+    (ev) => {
+      if (ev.target === backdrop) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeFullscreen();
+      }
+    },
+    { signal: abort.signal }
+  );
+  panel.addEventListener(
+    "pointerdown",
+    (ev) => {
+      ev.stopPropagation();
+    },
+    { signal: abort.signal }
+  );
+
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (!_fs) return;
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeFullscreen();
+        return;
+      }
+      if (ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        showFsPair(_fs.index - 1);
+        return;
+      }
+      if (ev.key === "ArrowRight") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        showFsPair(_fs.index + 1);
+        return;
+      }
+      if ((ev.ctrlKey || ev.metaKey) && (ev.key === "c" || ev.key === "C") && !ev.altKey && !ev.shiftKey) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        copyFsVisible();
+      }
+    },
+    opts
+  );
+
+  _fs = { backdrop, panel, meta, stage: null, node, index: 0, pairs, abort };
+  showFsPair(index);
+}
+
+function syncFullscreenForNode(node) {
+  if (!_fs || _fs.node !== node) return;
+  const pairs = buildPairs(node._ic311Top, node._ic311Bottom);
+  if (!pairs.length) {
+    closeFullscreen();
+    return;
+  }
+  _fs.pairs = pairs;
+  showFsPair(Math.min(_fs.index, pairs.length - 1));
 }
 
 /** Pair top[i] with bottom[i]; length-1 side broadcasts. */
@@ -714,6 +1098,10 @@ function applyMode(node) {
     bindCellMode(cell, mode);
     bindDragHandle(cell, node);
   }
+  if (_fs?.node === node && _fs.stage) {
+    bindCellMode(_fs.stage, mode);
+    syncClipWidth(_fs.stage);
+  }
 }
 
 function applyColumns(node) {
@@ -783,6 +1171,15 @@ function buildCell(pair, node) {
 
   cell._ic311Base = base;
   cell._ic311TopImg = topImg;
+
+  cell.addEventListener("dblclick", (ev) => {
+    if (ev.target?.closest?.(".ic311-drag-handle")) return;
+    if (!cell.classList.contains("is-ready")) return;
+    if (cell.classList.contains("is-unavailable")) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    openFullscreen(node, pair.index);
+  });
 
   // Reveal only when images are ready at the final aspect ratio (no black square flash).
   // Retry + concurrency limit avoids intermittent broken /view loads on fresh temp PNGs.
@@ -869,6 +1266,7 @@ function renderGrid(node) {
     empty.className = "ic311-empty";
     empty.textContent = "Connect image_top and/or image_bottom, then queue.";
     ui.content.replaceChildren(empty);
+    syncFullscreenForNode(node);
     return;
   }
 
@@ -888,6 +1286,8 @@ function renderGrid(node) {
     if (ui._renderGen !== renderGen) return;
     for (const cell of cells) syncClipWidth(cell);
   });
+
+  syncFullscreenForNode(node);
 }
 
 function applyOverlays(node) {
@@ -1166,6 +1566,7 @@ app.registerExtension({
 
     const onDestroy = nodeType.prototype.onDestroy;
     nodeType.prototype.onDestroy = function () {
+      if (_fs?.node === this) closeFullscreen();
       if (this._ic311ResizeObserver) {
         this._ic311ResizeObserver.disconnect();
       }

@@ -132,6 +132,40 @@ function clearNodeImagePreview(node) {
   node.animatedImages = undefined;
 }
 
+/** Normalize SavedResult-like refs for /view + workflow JSON. */
+function normalizeImageRefs(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const item of list) {
+    if (!item?.filename) continue;
+    out.push({
+      filename: String(item.filename),
+      subfolder: item.subfolder != null ? String(item.subfolder) : "",
+      type: item.type || "output",
+    });
+  }
+  return out;
+}
+
+/** Persist last-run image refs into node.properties (serialized with the workflow). */
+function persistImages(node) {
+  if (!node) return;
+  if (!node.properties) node.properties = {};
+  node.properties.ic311_top_images = normalizeImageRefs(node._ic311Top);
+  node.properties.ic311_bottom_images = normalizeImageRefs(node._ic311Bottom);
+}
+
+/** Restore image refs from properties into runtime fields. */
+function restoreImages(node) {
+  if (!node) return false;
+  const top = normalizeImageRefs(node.properties?.ic311_top_images);
+  const bottom = normalizeImageRefs(node.properties?.ic311_bottom_images);
+  if (!top.length && !bottom.length) return false;
+  node._ic311Top = top;
+  node._ic311Bottom = bottom;
+  return true;
+}
+
 function injectStyles() {
   document.getElementById("image-comparer-311-n311-style")?.remove();
   document.getElementById("image-comparer-311-n311-style-v2")?.remove();
@@ -1326,6 +1360,9 @@ function buildWidget(node) {
   if (node.properties.ic311_columns == null) node.properties.ic311_columns = 4;
   if (node.properties.ic311_show_overlays == null) node.properties.ic311_show_overlays = true;
   node.properties.ic311_columns = clampColumns(node.properties.ic311_columns);
+  if (!Array.isArray(node.properties.ic311_top_images)) node.properties.ic311_top_images = [];
+  if (!Array.isArray(node.properties.ic311_bottom_images)) node.properties.ic311_bottom_images = [];
+  restoreImages(node);
 
   const root = document.createElement("div");
   root.className = "ic311-root";
@@ -1546,17 +1583,20 @@ app.registerExtension({
     const onExecuted = nodeType.prototype.onExecuted;
     nodeType.prototype.onExecuted = function (output) {
       if (onExecuted) onExecuted.apply(this, arguments);
-      this._ic311Top = output?.top_images || [];
-      this._ic311Bottom = output?.bottom_images || [];
+      this._ic311Top = normalizeImageRefs(output?.top_images);
+      this._ic311Bottom = normalizeImageRefs(output?.bottom_images);
+      persistImages(this);
       clearNodeImagePreview(this);
       renderGrid(this);
       syncToolbar(this);
+      app.graph?.setDirtyCanvas?.(true);
     };
 
     const onConfigure = nodeType.prototype.onConfigure;
     nodeType.prototype.onConfigure = function () {
       const r = onConfigure?.apply(this, arguments);
       clearNodeImagePreview(this);
+      restoreImages(this);
       if (this._ic311) {
         syncToolbar(this);
         renderGrid(this);

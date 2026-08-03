@@ -7,6 +7,9 @@ picking a single pair from the batch.
 
 image_top is the new image overlaid on image_bottom (the base).
 
+Images are saved under output/comparer311/ (not temp) so the frontend can
+persist refs in the workflow and restore them across tabs / reloads.
+
 Part of the 311 Tool Suite (V3 API).
 """
 
@@ -18,17 +21,17 @@ from comfy_api.latest import io, ui
 
 
 def _save_batch(images, prefix: str, cls: type[io.ComfyNode]):
-    """Save a batch to temp and return the SavedResult list."""
+    """Save a batch under output/comparer311/ and return the SavedResult list."""
     if images is None or len(images) == 0:
         return []
-    os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
+    os.makedirs(folder_paths.get_output_directory(), exist_ok=True)
     rand = "".join(random.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(5))
     return ui.ImageSaveHelper.save_images(
         images,
-        filename_prefix=f"{prefix}_{rand}_",
-        folder_type=io.FolderType.temp,
+        filename_prefix=f"comparer311/{prefix}_{rand}",
+        folder_type=io.FolderType.output,
         cls=cls,
-        compress_level=1,
+        compress_level=4,
     )
 
 
@@ -43,7 +46,8 @@ class ImageComparer311(io.ComfyNode):
                 "Compare two image batches with Slide / Click wipe. "
                 "image_top is the overlay on image_bottom (base). "
                 "With Overlay on, a 9-dot handle drags image_top to other nodes. "
-                "Length-1 inputs broadcast."
+                "Length-1 inputs broadcast. "
+                "Previews persist in the workflow (output/comparer311/)."
             ),
             search_aliases=[
                 "image comparer", "compare", "slider", "before after",

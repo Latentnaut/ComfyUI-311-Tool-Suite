@@ -141,7 +141,7 @@ function normalizeImageRefs(list) {
     out.push({
       filename: String(item.filename),
       subfolder: item.subfolder != null ? String(item.subfolder) : "",
-      type: item.type || "output",
+      type: item.type || "temp",
     });
   }
   return out;

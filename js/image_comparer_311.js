@@ -17,7 +17,10 @@ import { api } from "../../scripts/api.js";
 import { beginDragOut, makeDragHandleButton } from "./image_drag_out_311.js";
 
 const NODE_NAME = "ImageComparer311";
-const STYLE_ID = "image-comparer-311-n311-style-v11";
+const STYLE_ID = "image-comparer-311-n311-style-v12";
+/** CDS §2.8 / Grid Composer copy icon — stroke SVG, no emoji. */
+const SVG_COPY =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:block;pointer-events:none;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const WIDGET_NAME = "ic311_ui";
 const MIN_HEIGHT = 180;
 const NODE_HEADER_H = 30;
@@ -177,6 +180,7 @@ function injectStyles() {
   document.getElementById("image-comparer-311-n311-style-v8")?.remove();
   document.getElementById("image-comparer-311-n311-style-v9")?.remove();
   document.getElementById("image-comparer-311-n311-style-v10")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v11")?.remove();
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -525,11 +529,31 @@ function injectStyles() {
       pointer-events: none;
       user-select: none;
     }
+    /* CDS icon button + §2.14 success flash (same triplet as Apply / Grid Composer). */
+    .ic311-fs-copy {
+      appearance: none;
+      position: absolute; top: 10px; right: 12px; z-index: 5;
+      width: 28px; height: 28px;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0; margin: 0;
+      background: var(--n311-bg-elev, #252525);
+      color: var(--n311-text-muted, #aaa);
+      border: 1px solid var(--n311-border-strong, #444);
+      border-radius: 4px;
+      cursor: pointer;
+      line-height: 1;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .ic311-fs-copy:hover {
+      background: var(--n311-bg-btn-hover, #333);
+      border-color: #666;
+      color: #ccc;
+    }
     @keyframes ic311-action-ok-flash {
       0%   { color: #44cc88; border-color: #44cc88; background: #1a3a28; }
-      100% { color: #e0e0e0; border-color: transparent; background: rgba(0,0,0,0.55); }
+      100% { color: #aaa; border-color: #444; background: #252525; }
     }
-    .ic311-fs-meta.ic311-action-ok {
+    .ic311-fs-copy.ic311-action-ok {
       animation: ic311-action-ok-flash 0.6s ease-out forwards;
     }
     .ic311-fs-stage {
@@ -584,7 +608,7 @@ function injectStyles() {
       will-change: left;
     }
     .ic311-fs-stage .ic311-view-label {
-      position: absolute; top: 10px; right: 12px;
+      position: absolute; top: 10px; right: 48px;
       background: rgba(0,0,0,0.55); color: #e0e0e0;
       font-size: 12px; font-weight: bold;
       padding: 4px 8px; border-radius: 4px;
@@ -670,10 +694,29 @@ async function copyFsVisible() {
   if (!img) return;
   try {
     const ok = await copyImgToClipboard(img);
-    if (ok) flashActionOk(_fs.meta);
+    if (ok) flashActionOk(_fs.copyBtn);
   } catch (err) {
     console.warn("[Image Comparer 311] clipboard copy failed", err);
   }
+}
+
+function makeFsCopyButton() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "ic311-fs-copy";
+  btn.title = "Copy visible image (Ctrl+C)";
+  btn.setAttribute("aria-label", "Copy visible image");
+  btn.innerHTML = SVG_COPY;
+  btn.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  });
+  btn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    copyFsVisible();
+  });
+  return btn;
 }
 
 function tryHydrateFromGrid(node, pair, base, topImg) {
@@ -785,7 +828,7 @@ function showFsPair(index) {
 
   _fs.stage?._ic311Abort?.abort();
   const stage = buildFsStage(pairs[idx]);
-  _fs.panel.replaceChildren(_fs.meta, stage);
+  _fs.panel.replaceChildren(_fs.meta, _fs.copyBtn, stage);
   _fs.stage = stage;
   loadFsStage(stage, _fs.node);
 }
@@ -806,7 +849,9 @@ function openFullscreen(node, index) {
   const meta = document.createElement("div");
   meta.className = "ic311-fs-meta";
 
-  panel.appendChild(meta);
+  const copyBtn = makeFsCopyButton();
+
+  panel.append(meta, copyBtn);
   backdrop.appendChild(panel);
   document.body.appendChild(backdrop);
 
@@ -863,7 +908,7 @@ function openFullscreen(node, index) {
     opts
   );
 
-  _fs = { backdrop, panel, meta, stage: null, node, index: 0, pairs, abort };
+  _fs = { backdrop, panel, meta, copyBtn, stage: null, node, index: 0, pairs, abort };
   showFsPair(index);
 }
 

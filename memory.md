@@ -4,6 +4,24 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 
 ---
 
+## Image From Batch 311
+* Port of ComfyUI_essentials `ImageFromBatch+`: inputs `image`, `start` (default 0), `length` (default -1 = rest of batch). Clamps `start`/`length` to batch size; returns `image[start:start+length]`. Pure V3 Python node — no JS.
+
+## Mask Preview 311
+* Port of essentials `MaskPreview+` / core `MaskPreview`: `MASK` in → `ui.PreviewMask` (reshape to RGB grayscale, temp). Output node, same temp-dir recreate pattern as Preview 311. No JS.
+
+## Mask Fix 311
+* Port of essentials `MaskFix+`: `erode_dilate` (neg=erode), `fill_holes` (grey_closing), `remove_isolated_pixels` (grey_opening), `smooth` (threshold+gaussian), `blur` (gaussian). Uses `scipy.ndimage` + `torchvision.transforms.v2`. Same even-kernel +1 quirk as upstream when smooth/blur are even.
+
+## Extract String 311
+* Port of lf-nodes `LF_ExtractString`: `rfind(start)` then `find(end)` after that; coerce via json.loads / int / float / true|yes|false|no. Outputs `JSON` via `io.Custom("JSON")` plus STRING/INT/FLOAT/BOOLEAN. No LF code widget / websocket UI.
+
+## String Split 311
+* Port of comfyui-various `JWStringSplit`: `source` / `split_by` / `from_right` (`false`|`true`). One split only — `split(..., 1)` or `rsplit(..., 1)`. Returns `(a, b)`; if no delimiter, `b=""`.
+
+## String To Int 311
+* Port of comfyui-various `JWStringToInteger`: `int(text)`. Invalid strings raise (same as upstream).
+
 ## CDS (ComfyUI Design System)
 
 - **Local hub:** [`.cds/README.md`](.cds/README.md) (junction -> `docs/CDS`)
@@ -20,7 +38,7 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 * **Height / performance / Overlay / Col:** see CDS sections 2.10-2.12, 3.5 and PERFORMANCE.md.
 * **Broken first N cells (browser chrome):** Never treat `img.onerror` as ready. Burst `/view` on fresh temp PNGs (8×2) can fail intermittently (conn limit / AV lock). Fix: concurrency queue (4), retry with plain PNG + cache-bust, clear `src` on failure, CDS `Unavailable` — never leave native broken-image icons.
 * **Drag-out (CDS §2.13):** No Drag mode. With **Overlay on**, each cell shows a 9-dot handle (bottom-right); hover → pointer + blue frame; press-drag exports **image_top**. Overlay off hides the handle. Slide/Click unchanged.
-* **Fullscreen lightbox:** Double-click a ready cell opens a CDS modal (`z-index:99999`) with the same pair wipe (Slide/Click from `ic311_mode`). Esc or backdrop click closes. ←/→ walk the batch. Ctrl+C copies the dominant layer (Top if wipe ratio ≥ 0.5, else Bot) via canvas → PNG `ClipboardItem`; success flashes the index meta (§2.14). Drag handle does not open FS. Singleton overlay; closes on node destroy / empty pairs.
+* **Fullscreen lightbox:** Double-click a ready cell opens a CDS modal (`z-index:99999`) with the same pair wipe (Slide/Click from `ic311_mode`). Esc or backdrop click closes. ←/→ walk the batch. Ctrl+C or top-right copy icon copies the dominant layer (Top if wipe ratio ≥ 0.5, else Bot) via canvas → PNG `ClipboardItem`; success flashes the copy icon (§2.14). Drag handle does not open FS. Singleton overlay; closes on node destroy / empty pairs.
 * **Preview persistence:** **temp only** — never writes to `output/`. Frontend stores temp refs in `properties.ic311_top_images` / `ic311_bottom_images` so tab switches restore the grid while temp files remain. After Comfy cleans temp, cells show Unavailable until the next queue.
 * **Drag ghost:** Always a `<canvas>` painted from the visible decoded bitmap (`ghostSource` / `node.imgs[idx]`). Never a floating `<img src=/view>` — failed or empty src showed native broken-image chrome (§4.8). Fallback URL load paints into the same canvas; onerror → CDS mini "Unavailable". `viewURL` uses `encodeURIComponent` like Image Selector / MIL.
 * **Preview batch index:** ComfyUI grid mode keeps `imageIndex === null` and sets `overIndex` on hover. Always use `resolvePreviewImageIndex` — never `imageIndex ?? 0` (that always dragged image 0). Grip is the only drag start target; `⇱` emoji badge removed (CDS v1.6).

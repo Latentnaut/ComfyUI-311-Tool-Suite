@@ -101,6 +101,30 @@ function getLabels(node) {
     return node.properties.customLabels;
 }
 
+/** Real slot title for menus/dialogs. Drawing may temporarily set inp.label to " ". */
+function realSlotLabel(node, inp) {
+    if (!inp) return "";
+    if (!inp.name || inp.name === "index") return inp.label || inp.name || "";
+    var labels = getLabels(node);
+    var saved = labels[inp.name];
+    if (saved && saved !== " " && !isDefaultName(saved)) return saved;
+    if (inp._311label && inp._311label !== " " && !isDefaultName(inp._311label)) return inp._311label;
+    if (inp.label && inp.label !== " " && !isDefaultName(inp.label)) return inp.label;
+    return inp.name;
+}
+
+function restoreSlotLabel(node, inp) {
+    if (!inp || !inp.name || inp.name === "index") return;
+    inp.label = realSlotLabel(node, inp);
+}
+
+function restoreAllSlotLabels(node) {
+    if (!node.inputs) return;
+    for (var i = 0; i < node.inputs.length; i++) {
+        restoreSlotLabel(node, node.inputs[i]);
+    }
+}
+
 /** Called once during onConfigure to capture labels from saved JSON. */
 function captureLabelsFromSavedData(node, data) {
     if (!data || !data.inputs) return;
@@ -275,16 +299,19 @@ function setup311(node) {
         }
     };
 
-    // Override getContextMenuOptions to temporarily restore labels for context menus (rename prompts)
+    // ComfyUI Rename Slot reads getInputInfo(slot).label (not getContextMenuOptions).
+    var origGetInputInfo = node.getInputInfo;
+    node.getInputInfo = function (slot) {
+        var info = origGetInputInfo
+            ? origGetInputInfo.apply(this, arguments)
+            : (this.inputs && slot < this.inputs.length ? this.inputs[slot] : null);
+        restoreSlotLabel(this, info);
+        return info;
+    };
+
     var origGetContextMenuOptions = node.getContextMenuOptions || node.constructor.prototype.getContextMenuOptions;
     node.getContextMenuOptions = function (canvas) {
-        var labels = getLabels(this);
-        for (var i = 0; i < this.inputs.length; i++) {
-            var inp = this.inputs[i];
-            if (inp && inp.name && inp.name !== "index") {
-                inp.label = labels[inp.name] || inp.name;
-            }
-        }
+        restoreAllSlotLabels(this);
         if (origGetContextMenuOptions) {
             return origGetContextMenuOptions.apply(this, arguments);
         }

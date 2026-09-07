@@ -33,6 +33,12 @@ Concatenates multiple string inputs together with custom delimiters.
 ### 🍌 SAM3 Images 311
 Helper utility node for Segment Anything 3 workflows.
 
+### 🔀 SetNode 311 / GetNode 311
+Virtual tunnel nodes (KJNodes `SetNode` / `GetNode` still load). Frontend-only.
+*   **New nodes:** title follows the Constant field as `⚡ {name}`. A hand-edited title persists and stops auto-update. Right-click **Fix node (recreate)** restores `⚡` + Constant.
+*   **GetNode Rename:** button under Constant opens the text prompt and updates that name on every matching Set/Get in the workflow.
+*   Existing graphs keep their titles.
+
 ### ⚖️ Image Comparer 311
 Batch-aware left/right image comparison (rgthree-style slider).
 *   **All pairs at once:** Unlike rgthree Image Comparer, every `image_top[i]` / `image_bottom[i]` pair is shown in a Preview-style grid — no batch-index picking.

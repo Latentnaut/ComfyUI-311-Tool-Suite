@@ -21,6 +21,192 @@ function isSetOrGetType(type) {
 	return isSetType(type) || isGetType(type);
 }
 
+const TITLE_MARK = "⚡";
+const AUTO_TITLE_PROP = "n311AutoTitle";
+
+function constantValue(node) {
+	return String(node.widgets?.[0]?.value ?? "").trim();
+}
+
+function autoTitleFor(node) {
+	const name = constantValue(node);
+	return name ? `${TITLE_MARK} ${name}` : TITLE_MARK;
+}
+
+function isAutoTitleEnabled(node) {
+	return node.properties?.[AUTO_TITLE_PROP] === true;
+}
+
+function applyAutoTitle(node) {
+	if (!isAutoTitleEnabled(node)) return;
+	node._n311ApplyingAutoTitle = true;
+	node.title = autoTitleFor(node);
+	node._n311ApplyingAutoTitle = false;
+	node.setDirtyCanvas?.(true, true);
+}
+
+function wrapConfigure(node) {
+	if (node._n311ConfigureWrapped) return;
+	node._n311ConfigureWrapped = true;
+	const original = node.configure;
+	node.configure = function (info) {
+		this._n311Configuring = true;
+		const result = original ? original.apply(this, arguments) : undefined;
+		this._n311Configuring = false;
+		const saved = info?.properties;
+		if (saved && Object.prototype.hasOwnProperty.call(saved, AUTO_TITLE_PROP)) {
+			this.properties[AUTO_TITLE_PROP] = saved[AUTO_TITLE_PROP] === true;
+		} else if (saved) {
+			this.properties[AUTO_TITLE_PROP] = false;
+		}
+		installTitleWatch(this);
+		hookWidgetTyping(this);
+		if (isAutoTitleEnabled(this)) {
+			applyAutoTitle(this);
+		}
+		return result;
+	};
+}
+
+function installTitleWatch(node) {
+	if (node._n311TitleWatch) return;
+	node._n311TitleWatch = true;
+	wrapConfigure(node);
+	let current = node.title;
+	try {
+		Object.defineProperty(node, "title", {
+			configurable: true,
+			enumerable: true,
+			get() {
+				return current;
+			},
+			set(v) {
+				const next = v == null ? "" : String(v);
+				if (
+					!node._n311ApplyingAutoTitle &&
+					!node._n311Configuring &&
+					isAutoTitleEnabled(node) &&
+					next !== autoTitleFor(node)
+				) {
+					node.properties[AUTO_TITLE_PROP] = false;
+				}
+				current = next;
+			},
+		});
+	} catch (_err) {
+		/* keep native title if the instance already locked it */
+	}
+}
+
+function initAutoTitle(node, fromSavedGraph) {
+	if (!node.properties) node.properties = {};
+	if (fromSavedGraph) {
+		if (node.properties[AUTO_TITLE_PROP] !== true) {
+			node.properties[AUTO_TITLE_PROP] = false;
+		}
+	} else if (node.properties[AUTO_TITLE_PROP] === undefined) {
+		node.properties[AUTO_TITLE_PROP] = true;
+	}
+	installTitleWatch(node);
+	if (isAutoTitleEnabled(node)) {
+		applyAutoTitle(node);
+	}
+}
+
+function hookWidgetTyping(node) {
+	const widget = node.widgets?.[0];
+	if (!widget || widget._n311AutoTitleHooked) return;
+	widget._n311AutoTitleHooked = true;
+	const original = widget.callback;
+	widget.callback = function (...args) {
+		const result = original ? original.apply(this, args) : undefined;
+		applyAutoTitle(node);
+		return result;
+	};
+	const bindInput = () => {
+		const el = widget.inputEl || widget.element;
+		if (!el || el._n311AutoTitle) return;
+		el._n311AutoTitle = true;
+		el.addEventListener("input", () => {
+			widget.value = el.value;
+			applyAutoTitle(node);
+			node.setDirtyCanvas?.(true, true);
+		});
+	};
+	bindInput();
+	setTimeout(bindInput, 0);
+	setTimeout(bindInput, 150);
+}
+
+function copySetGetConnections(src, dest) {
+	if (src.inputs) {
+		for (const input of src.inputs) {
+			if (!input?.link) continue;
+			const link = app.graph.links[input.link];
+			if (!link) continue;
+			const origin = app.graph.getNodeById(link.origin_id);
+			origin?.connect(link.origin_slot, dest.id, input.name);
+		}
+	}
+	if (src.outputs) {
+		for (let i = 0; i < src.outputs.length; i++) {
+			const output = src.outputs[i];
+			if (!output?.links?.length) continue;
+			for (const linkId of [...output.links]) {
+				const link = app.graph.links[linkId];
+				if (!link) continue;
+				const target = app.graph.getNodeById(link.target_id);
+				if (target) {
+					dest.connect(i, target, link.target_slot);
+				}
+			}
+		}
+	}
+}
+
+function recreateSetGetWithAutoTitle(oldNode) {
+	const type = oldNode.type;
+	const pos = [oldNode.pos[0], oldNode.pos[1]];
+	const constant = oldNode.widgets?.[0]?.value ?? "";
+	const previousName = oldNode.properties?.previousName ?? "";
+	const color = oldNode.color;
+	const bgcolor = oldNode.bgcolor;
+
+	const newNode = LiteGraph.createNode(type);
+	if (!newNode) return;
+	newNode.pos = pos;
+	app.graph.add(newNode, false);
+	copySetGetConnections(oldNode, newNode);
+	app.graph.remove(oldNode);
+
+	if (!newNode.properties) newNode.properties = {};
+	newNode.properties[AUTO_TITLE_PROP] = true;
+	newNode.properties.previousName = previousName;
+	if (newNode.widgets?.[0]) {
+		newNode.widgets[0].value = constant;
+	}
+	if (color) newNode.color = color;
+	if (bgcolor) newNode.bgcolor = bgcolor;
+	if (typeof newNode.onRename === "function") newNode.onRename();
+	if (typeof newNode.update === "function") newNode.update();
+	applyAutoTitle(newNode);
+	app.graph.afterChange?.();
+	requestAnimationFrame(() => app.canvas.setDirty(true, true));
+}
+
+function addFixNodeMenu(options, node) {
+	const callback = () => recreateSetGetWithAutoTitle(node);
+	const existing = options.find((item) => item?.content === "Fix node (recreate)");
+	if (existing) {
+		existing.callback = callback;
+		return;
+	}
+	options.push({
+		content: "Fix node (recreate)",
+		callback,
+	});
+}
+
 function registerTypeAndAlias(canonical, legacy, clazz, title) {
 	LiteGraph.registerNodeType(canonical, Object.assign(clazz, { title }));
 	if (LiteGraph.registered_node_types[canonical]) {
@@ -77,6 +263,202 @@ function showAlert(message) {
 	});
 }
 
+function showRenameToast(detail) {
+	app.extensionManager.toast.add({
+		severity: "warn",
+		summary: "Set/Get 311",
+		detail,
+		life: 4000,
+	});
+}
+
+function forEachGraphNode(graph, visit) {
+	if (!graph?._nodes) return;
+	for (const node of graph._nodes) {
+		visit(node, graph);
+		if (node.subgraph && node.subgraph !== graph) {
+			forEachGraphNode(node.subgraph, visit);
+		}
+	}
+}
+
+function constantTakenByOtherSet(graph, newName, oldName) {
+	let taken = false;
+	forEachGraphNode(graph, (node) => {
+		if (taken) return;
+		if (isSetType(node.type) && constantValue(node) === newName && constantValue(node) !== oldName) {
+			taken = true;
+		}
+	});
+	return taken;
+}
+
+function applyRenamedTitle(node) {
+	if (!node.properties) node.properties = {};
+	node.properties[AUTO_TITLE_PROP] = true;
+	applyAutoTitle(node);
+}
+
+function applyConstantRename(oldName, rawNew, sourceGet) {
+	const newName = String(rawNew ?? "").trim();
+	if (!newName || newName === oldName) return;
+
+	const root = sourceGet?.graph || app.graph;
+	if (!oldName) {
+		sourceGet.widgets[0].value = newName;
+		sourceGet.onRename?.();
+		applyRenamedTitle(sourceGet);
+		sourceGet.setDirtyCanvas?.(true, true);
+		app.graph.afterChange?.();
+		return;
+	}
+
+	if (constantTakenByOtherSet(root, newName, oldName)) {
+		showRenameToast(`Constant "${newName}" already exists`);
+		return;
+	}
+
+	app.graph.beforeChange?.();
+
+	const sets = [];
+	const gets = [];
+	forEachGraphNode(root, (node) => {
+		if (isSetType(node.type) && constantValue(node) === oldName) sets.push(node);
+		if (isGetType(node.type) && constantValue(node) === oldName) gets.push(node);
+	});
+
+	for (const set of sets) {
+		if (!set.properties) set.properties = {};
+		set.properties.previousName = oldName;
+		set.properties[AUTO_TITLE_PROP] = true;
+		set.widgets[0].value = newName;
+		set.update?.();
+		set.properties.previousName = newName;
+	}
+
+	for (const get of gets) {
+		if (!get.properties) get.properties = {};
+		get.properties[AUTO_TITLE_PROP] = true;
+		if (constantValue(get) !== newName) {
+			get.widgets[0].value = newName;
+		}
+		get.onRename?.();
+	}
+
+	for (const node of [...sets, ...gets]) {
+		applyRenamedTitle(node);
+	}
+
+	app.graph.afterChange?.();
+	app.canvas.setDirty(true, true);
+}
+
+function graphToClient(x, y) {
+	const lcanvas = app.canvas;
+	const el = lcanvas?.canvas;
+	if (!el) return { clientX: 40, clientY: 40 };
+	const rect = el.getBoundingClientRect();
+	let cx;
+	let cy;
+	if (typeof lcanvas.convertOffsetToCanvas === "function") {
+		const p = lcanvas.convertOffsetToCanvas([x, y]);
+		cx = p[0];
+		cy = p[1];
+	} else {
+		const ds = lcanvas.ds || { offset: [0, 0], scale: 1 };
+		cx = (x + ds.offset[0]) * ds.scale;
+		cy = (y + ds.offset[1]) * ds.scale;
+	}
+	const sx = rect.width / (el.clientWidth || rect.width || 1);
+	const sy = rect.height / (el.clientHeight || rect.height || 1);
+	return {
+		clientX: rect.left + cx * sx,
+		clientY: rect.top + cy * sy,
+	};
+}
+
+function renameButtonClientRect(node) {
+	const widget = node.widgets?.find((w) => w.type === "button" && w.name === "Rename");
+	const h = LiteGraph.NODE_WIDGET_HEIGHT || 20;
+	const localY = widget?.last_y ?? Math.max(0, (node.size?.[1] ?? h) - h - 2);
+	const topLeft = graphToClient(node.pos[0] + 10, node.pos[1] + localY);
+	const bottomRight = graphToClient(
+		node.pos[0] + (node.size?.[0] ?? 180) - 10,
+		node.pos[1] + localY + h,
+	);
+	return {
+		left: topLeft.clientX,
+		top: topLeft.clientY,
+		right: bottomRight.clientX,
+		bottom: bottomRight.clientY,
+		width: Math.max(80, bottomRight.clientX - topLeft.clientX),
+		height: Math.max(h, bottomRight.clientY - topLeft.clientY),
+	};
+}
+
+function eventFromArgs(args) {
+	return args.find((item) => item && typeof item.clientX === "number" && typeof item.clientY === "number");
+}
+
+function eventOnRenameButton(node, event) {
+	if (event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+		return event;
+	}
+	const rect = renameButtonClientRect(node);
+	return {
+		clientX: rect.left + 8,
+		clientY: rect.top + 4,
+	};
+}
+
+function placePromptAboveRename(dialog, node) {
+	if (!dialog?.style) return;
+	const button = renameButtonClientRect(node);
+	const gap = 8;
+	const width = dialog.offsetWidth || 240;
+	const height = dialog.offsetHeight || 40;
+	let left = button.left;
+	let top = button.top - height - gap;
+	if (top < 8) top = button.bottom + gap;
+	left = Math.min(Math.max(8, left), window.innerWidth - width - 8);
+	top = Math.min(Math.max(8, top), window.innerHeight - height - 8);
+	dialog.style.position = "fixed";
+	dialog.style.left = `${left}px`;
+	dialog.style.top = `${top}px`;
+	dialog.style.transform = "none";
+	dialog.style.zIndex = "2000";
+}
+
+function promptRenameConstant(getNode, event) {
+	const oldName = constantValue(getNode);
+	const canvas = app.canvas;
+	const onDone = (next) => applyConstantRename(oldName, next, getNode);
+	if (typeof canvas?.prompt === "function") {
+		const dialog = canvas.prompt("Rename", oldName, onDone, eventOnRenameButton(getNode, event));
+		requestAnimationFrame(() => placePromptAboveRename(dialog, getNode));
+		return;
+	}
+	const next = window.prompt("Rename", oldName);
+	if (next == null) return;
+	onDone(next);
+}
+
+function ensureRenameButton(node) {
+	if (!isGetType(node.type)) return;
+	if (node.widgets?.some((w) => w.type === "button" && w.name === "Rename")) return;
+	node.addWidget(
+		"button",
+		"Rename",
+		"Rename",
+		(...args) => promptRenameConstant(node, eventFromArgs(args)),
+		{ serialize: false }
+	);
+	const min = node.computeSize?.();
+	if (min && node.size?.[1] < min[1]) {
+		node.size[1] = min[1];
+	}
+}
+
 function registerSetGetTypes() {
 	class SetNode extends LGraphNode {
 		defaultVisibility = true;
@@ -95,6 +477,7 @@ function registerSetGetTypes() {
 				};
 			}
 			this.properties.showOutputText = SetNode.defaultVisibility;
+			initAutoTitle(this, false);
 
 			const node = this;
 
@@ -104,7 +487,9 @@ function registerSetGetTypes() {
 				"",
 				(s, t, u, v, x) => {
 					node.validateName(node.graph);
-					if (this.widgets[0].value !== "") {
+					if (isAutoTitleEnabled(node)) {
+						applyAutoTitle(node);
+					} else if (this.widgets[0].value !== "") {
 						this.title = (!isPrefixDisabled() ? "Set_" : "") + this.widgets[0].value;
 					}
 					this.update();
@@ -112,6 +497,7 @@ function registerSetGetTypes() {
 				},
 				{}
 			);
+			hookWidgetTyping(this);
 
 			this.addInput("*", "*");
 			this.addOutput("*", "*");
@@ -128,7 +514,11 @@ function registerSetGetTypes() {
 					if (this.inputs[slot].name === "") {
 						this.inputs[slot].type = "*";
 						this.inputs[slot].name = "*";
-						this.title = "Set";
+						if (isAutoTitleEnabled(this)) {
+							applyAutoTitle(this);
+						} else {
+							this.title = "Set";
+						}
 					}
 				}
 				if (slotType == 2 && !isChangeConnect) {
@@ -142,7 +532,9 @@ function registerSetGetTypes() {
 					const resolve = link_info.resolve(node.graph);
 					const type = (resolve?.subgraphInput ?? resolve?.output)?.type;
 					if (type) {
-						if (this.title === "Set") {
+						if (isAutoTitleEnabled(this)) {
+							applyAutoTitle(this);
+						} else if (this.title === "Set") {
 							this.title = (!isPrefixDisabled() ? "Set_" : "") + type;
 						}
 						if (this.widgets[0].value === "*") {
@@ -206,12 +598,20 @@ function registerSetGetTypes() {
 				cloned.inputs[0].type = "*";
 				cloned.value = "";
 				cloned.properties.previousName = "";
+				cloned.properties[AUTO_TITLE_PROP] = this.properties[AUTO_TITLE_PROP];
 				cloned.size = cloned.computeSize();
+				if (isAutoTitleEnabled(cloned)) {
+					applyAutoTitle(cloned);
+				}
 				return cloned;
 			};
 
 			this.onAdded = function(graph) {
 				this.validateName(graph);
+				hookWidgetTyping(this);
+				if (isAutoTitleEnabled(this)) {
+					applyAutoTitle(this);
+				}
 			};
 
 			this.update = function() {
@@ -255,6 +655,16 @@ function registerSetGetTypes() {
 					otherNode.setComboValues([this]);
 				}
 			});
+		}
+		onConfigure(info) {
+			const saved = info?.properties;
+			if (saved && Object.prototype.hasOwnProperty.call(saved, AUTO_TITLE_PROP)) {
+				this.properties[AUTO_TITLE_PROP] = saved[AUTO_TITLE_PROP] === true;
+			} else if (saved) {
+				this.properties[AUTO_TITLE_PROP] = false;
+			}
+			installTitleWatch(this);
+			hookWidgetTyping(this);
 		}
 		getExtraMenuOptions(_, options) {
 			this.menuEntry = this.drawConnection ? "Hide connections" : "Show connections";
@@ -319,6 +729,7 @@ function registerSetGetTypes() {
 					}
 				});
 			}
+			addFixNodeMenu(options, this);
 		}
 
 		onDrawForeground(ctx, lGraphCanvas) {
@@ -389,6 +800,7 @@ function registerSetGetTypes() {
 				this.properties = {};
 			}
 			this.properties.showOutputText = GetNode.defaultVisibility;
+			initAutoTitle(this, false);
 			const node = this;
 			this.addWidget(
 				"combo",
@@ -403,6 +815,13 @@ function registerSetGetTypes() {
 						return setterNodes.map((otherNode) => otherNode.widgets[0].value).sort();
 					}
 				}
+			);
+			this.addWidget(
+				"button",
+				"Rename",
+				"Rename",
+				(...args) => promptRenameConstant(node, eventFromArgs(args)),
+				{ serialize: false }
 			);
 
 			this.addOutput("*", "*");
@@ -428,19 +847,30 @@ function registerSetGetTypes() {
 					let linkType = (setter.inputs[0].type);
 
 					this.setType(linkType);
-					this.title = (!isPrefixDisabled() ? "Get_" : "") + setter.widgets[0].value;
+					if (isAutoTitleEnabled(this)) {
+						applyAutoTitle(this);
+					} else {
+						this.title = (!isPrefixDisabled() ? "Get_" : "") + setter.widgets[0].value;
+					}
 
 					if (isAutoColorEnabled()) {
 						setColorAndBgColor.call(this, linkType);
 					}
 				} else {
 					this.setType("*");
+					if (isAutoTitleEnabled(this)) {
+						applyAutoTitle(this);
+					}
 				}
 			};
 
 			this.clone = function () {
 				const cloned = GetNode.prototype.clone.apply(this);
+				cloned.properties[AUTO_TITLE_PROP] = this.properties[AUTO_TITLE_PROP];
 				cloned.size = cloned.computeSize();
+				if (isAutoTitleEnabled(cloned)) {
+					applyAutoTitle(cloned);
+				}
 				return cloned;
 			};
 
@@ -488,9 +918,26 @@ function registerSetGetTypes() {
 				showAlert(errorMessage);
 			}
 		}
+		onConfigure(info) {
+			const saved = info?.properties;
+			if (saved && Object.prototype.hasOwnProperty.call(saved, AUTO_TITLE_PROP)) {
+				this.properties[AUTO_TITLE_PROP] = saved[AUTO_TITLE_PROP] === true;
+			} else if (saved) {
+				this.properties[AUTO_TITLE_PROP] = false;
+			}
+			installTitleWatch(this);
+			hookWidgetTyping(this);
+			ensureRenameButton(this);
+		}
 		onAdded(graph) {
+			hookWidgetTyping(this);
+			ensureRenameButton(this);
+			if (isAutoTitleEnabled(this)) {
+				applyAutoTitle(this);
+			}
 		}
 		getExtraMenuOptions(_, options) {
+			addFixNodeMenu(options, this);
 			let menuEntry = this.drawConnection ? "Hide connections" : "Show connections";
 			this.currentSetter = this.findSetter(this.graph);
 			if (!this.currentSetter) return;
@@ -626,6 +1073,22 @@ app.registerExtension({
 	registerCustomNodes() {
 		registerSetGetTypes();
 	},
+	async nodeCreated(node) {
+		if (!isSetOrGetType(node.type)) return;
+		hookWidgetTyping(node);
+		if (isAutoTitleEnabled(node)) {
+			applyAutoTitle(node);
+		}
+	},
+	async loadedGraphNode(node) {
+		if (!isSetOrGetType(node.type)) return;
+		if (node.properties?.[AUTO_TITLE_PROP] !== true) {
+			node.properties[AUTO_TITLE_PROP] = false;
+		}
+		installTitleWatch(node);
+		hookWidgetTyping(node);
+		ensureRenameButton(node);
+	},
 	async beforeRegisterNodeDef(nodeType, nodeData, app) {
 		if (nodeData.input && nodeData.input.required) {
 			addMenuHandler(nodeType, function (_, options) {
@@ -647,6 +1110,22 @@ app.registerExtension({
 		// KJNodes loads after this pack alphabetically and would overwrite SetNode/GetNode.
 		registerSetGetTypes();
 		setTimeout(registerSetGetTypes, 0);
+
+		if (!document._n311SetGetInputHook) {
+			document._n311SetGetInputHook = true;
+			document.addEventListener("input", (event) => {
+				const pair = app.canvas?.node_widget;
+				if (!pair) return;
+				const [editNode, editWidget] = pair;
+				if (!isSetOrGetType(editNode?.type)) return;
+				if (editWidget !== editNode.widgets?.[0]) return;
+				const target = event.target;
+				if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) return;
+				editWidget.value = target.value;
+				applyAutoTitle(editNode);
+				editNode.setDirtyCanvas?.(true, true);
+			}, true);
+		}
 
 		const originalComputeVisibleNodes = LGraphCanvas.prototype.computeVisibleNodes;
 		if (!LGraphCanvas.prototype._311setgetVisiblePatched) {

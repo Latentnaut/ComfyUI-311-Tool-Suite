@@ -4,6 +4,13 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 
 ---
 
+## SetNode / GetNode
+* Canonical types `SetNode 311` / `GetNode 311`. Legacy KJNodes ids still load.
+* New nodes set `properties.n311AutoTitle = true`: title is `⚡ {Constant}` and updates while typing. Editing the node title by hand sets the flag false and that text persists. Old graphs have no flag → auto off, titles unchanged.
+* Pairing uses `isSetType` / `isGetType` so mixed old/new ids still resolve.
+* **Fix node (recreate):** Set/Get keep the Constant, re-enable `n311AutoTitle`, and retitle to `⚡ {Constant}`. Virtual nodes do not get Manager's recreate hook (`beforeRegisterNodeDef`), so we own that menu item.
+* **Get Rename:** button under Constant opens `canvas.prompt`. Confirmed name is written to every Set/Get in the current graph (and nested subgraphs) that shared the old Constant. Aborts if another Set already owns the new name. Prompt is `position:fixed` and must be placed in viewport coords above the Rename widget — without that it lands at `canvas.width/2` (bottom-right, clipped). Rename re-enables `n311AutoTitle` and retitles every touched node to `⚡ {name}` (legacy graphs have the flag off, so onRename would otherwise write a title without the mark).
+
 ## CDS (ComfyUI Design System)
 
 - **Local hub:** [`.cds/README.md`](.cds/README.md) (junction -> `docs/CDS`)

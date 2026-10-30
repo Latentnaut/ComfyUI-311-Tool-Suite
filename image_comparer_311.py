@@ -16,6 +16,7 @@ Part of the 311 Tool Suite (V3 API).
 
 import os
 import random
+import time
 
 import folder_paths
 from comfy_api.latest import io, ui
@@ -25,15 +26,25 @@ def _save_batch(images, prefix: str, cls: type[io.ComfyNode]):
     """Save a batch to temp and return the SavedResult list."""
     if images is None or len(images) == 0:
         return []
-    os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
     rand = "".join(random.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(5))
-    return ui.ImageSaveHelper.save_images(
-        images,
-        filename_prefix=f"{prefix}_{rand}_",
-        folder_type=io.FolderType.temp,
-        cls=cls,
-        compress_level=1,
-    )
+    # The temp dir can vanish mid-prompt (another ComfyUI launched with the
+    # same --temp-directory rmtree's it on startup; on Windows a dir being
+    # deleted still "exists" for a moment). Recreate and retry.
+    last_err = None
+    for attempt in range(5):
+        os.makedirs(folder_paths.get_temp_directory(), exist_ok=True)
+        try:
+            return ui.ImageSaveHelper.save_images(
+                images,
+                filename_prefix=f"{prefix}_{rand}_",
+                folder_type=io.FolderType.temp,
+                cls=cls,
+                compress_level=1,
+            )
+        except (FileNotFoundError, PermissionError) as e:
+            last_err = e
+            time.sleep(0.25 * (attempt + 1))
+    raise last_err
 
 
 class ImageComparer311(io.ComfyNode):

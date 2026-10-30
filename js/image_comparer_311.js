@@ -7,6 +7,7 @@
  * Layering: bottom is the base; top is the overlay wipe from the left.
  * Slide: hover wipe. Click: hold for bottom.
  * Overlay on: 9-dot handle (bottom-right) arms drag-out of image_top.
+ * Double-click a cell: fullscreen pair viewer (Slide/Click, arrows, Ctrl+C, Esc).
  *
  * Spec: docs/UI_DESIGN_SYSTEM.md (n311 tokens + DOM widget shell)
  */
@@ -16,7 +17,10 @@ import { api } from "../../scripts/api.js";
 import { beginDragOut, makeDragHandleButton } from "./image_drag_out_311.js";
 
 const NODE_NAME = "ImageComparer311";
-const STYLE_ID = "image-comparer-311-n311-style-v9";
+const STYLE_ID = "image-comparer-311-n311-style-v12";
+/** CDS §2.8 / Grid Composer copy icon — stroke SVG, no emoji. */
+const SVG_COPY =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:block;pointer-events:none;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const WIDGET_NAME = "ic311_ui";
 const MIN_HEIGHT = 180;
 const NODE_HEADER_H = 30;
@@ -30,11 +34,12 @@ const SLIDE_REST = 1;
 
 /** Cap parallel /view fetches — bursts of 16+ hit browser/server races on fresh temp PNGs. */
 const LOAD_CONCURRENCY = 4;
-const LOAD_ATTEMPTS = [
-  { preview: true, delayMs: 0 },
-  { preview: false, delayMs: 100 },
-  { preview: false, delayMs: 250 },
-];
+/**
+ * Retry backoff. The first requests land while the server is still finishing the
+ * workflow, so they can stall for seconds; short retries all fail inside that window.
+ */
+const LOAD_RETRY_DELAYS_MS = [0, 400, 1200, 3000, 8000];
+const LOAD_TIMEOUT_MS = 30000;
 
 let _loadActive = 0;
 const _loadQueue = [];
@@ -64,29 +69,21 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function appendQuery(url, fragment) {
-  if (!fragment) return url;
-  const f = String(fragment);
-  if (f.startsWith("&") || f.startsWith("?")) return url + f.replace(/^\?/, "&");
-  return `${url}&${f}`;
-}
-
-function imgURL(d, { preview = true, bust = true } = {}) {
+/**
+ * Plain PNG, no `preview=webp`: that makes the server re-encode through PIL on the
+ * request thread, which is what stalls the first batch while a workflow is running.
+ */
+function imgURL(d) {
   if (!d?.filename) return "";
   const p = new URLSearchParams();
   p.set("filename", d.filename);
   if (d.subfolder) p.set("subfolder", d.subfolder);
   p.set("type", d.type || "temp");
-  let url = api.apiURL(`/view?${p}`);
-  if (preview) url = appendQuery(url, app.getPreviewFormatParam?.() || "");
-  if (bust) {
-    const rand = app.getRandParam?.() || `&rand=${Math.random()}`;
-    url = appendQuery(url, rand);
-  }
-  return url;
+  p.set("rand", String(Math.random()));
+  return api.apiURL(`/view?${p}`);
 }
 
-function waitLoadOrError(img, timeoutMs = 12000) {
+function waitLoadOrError(img, timeoutMs = LOAD_TIMEOUT_MS) {
   return new Promise((resolve) => {
     if (img.complete && img.naturalWidth > 0) {
       resolve(true);
@@ -109,22 +106,23 @@ function waitLoadOrError(img, timeoutMs = 12000) {
   });
 }
 
-/** Load a temp preview with retries (plain PNG fallback). Never leave browser broken-image chrome. */
+/** Load a temp image with backoff retries. Never leave browser broken-image chrome. */
 async function assignImageSrc(img, data) {
   if (!img || !data?.filename) return false;
   img.alt = "";
   img.decoding = "async";
 
-  for (const attempt of LOAD_ATTEMPTS) {
-    if (attempt.delayMs) await sleep(attempt.delayMs);
+  for (const delayMs of LOAD_RETRY_DELAYS_MS) {
+    if (delayMs) await sleep(delayMs);
     const ok = await enqueueLoad(async () => {
-      img.src = imgURL(data, { preview: attempt.preview, bust: true });
+      img.src = imgURL(data);
       return waitLoadOrError(img);
     });
     if (ok) return true;
   }
 
   img.removeAttribute("src");
+  console.warn("[Image Comparer 311] could not load", data.filename);
   return false;
 }
 
@@ -137,6 +135,40 @@ function clearNodeImagePreview(node) {
   node.animatedImages = undefined;
 }
 
+/** Normalize SavedResult-like refs for /view + workflow JSON. */
+function normalizeImageRefs(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const item of list) {
+    if (!item?.filename) continue;
+    out.push({
+      filename: String(item.filename),
+      subfolder: item.subfolder != null ? String(item.subfolder) : "",
+      type: item.type || "temp",
+    });
+  }
+  return out;
+}
+
+/** Persist last-run temp refs into node.properties (tab switch / same session). */
+function persistImages(node) {
+  if (!node) return;
+  if (!node.properties) node.properties = {};
+  node.properties.ic311_top_images = normalizeImageRefs(node._ic311Top);
+  node.properties.ic311_bottom_images = normalizeImageRefs(node._ic311Bottom);
+}
+
+/** Restore image refs from properties into runtime fields. */
+function restoreImages(node) {
+  if (!node) return false;
+  const top = normalizeImageRefs(node.properties?.ic311_top_images);
+  const bottom = normalizeImageRefs(node.properties?.ic311_bottom_images);
+  if (!top.length && !bottom.length) return false;
+  node._ic311Top = top;
+  node._ic311Bottom = bottom;
+  return true;
+}
+
 function injectStyles() {
   document.getElementById("image-comparer-311-n311-style")?.remove();
   document.getElementById("image-comparer-311-n311-style-v2")?.remove();
@@ -146,6 +178,9 @@ function injectStyles() {
   document.getElementById("image-comparer-311-n311-style-v6")?.remove();
   document.getElementById("image-comparer-311-n311-style-v7")?.remove();
   document.getElementById("image-comparer-311-n311-style-v8")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v9")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v10")?.remove();
+  document.getElementById("image-comparer-311-n311-style-v11")?.remove();
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -211,20 +246,26 @@ function injectStyles() {
       display: flex;
       align-items: center;
       justify-content: center;
-      cursor: default;
+      cursor: pointer;
       min-height: 64px;
       aspect-ratio: 1;
     }
+    .ic311-cell.is-unavailable:hover { border-color: var(--n311-accent-dim, #5a7abf); }
     .ic311-cell.is-unavailable .ic311-layer,
     .ic311-cell.is-unavailable .ic311-top-clip,
-    .ic311-cell.is-unavailable .ic311-divider {
+    .ic311-cell.is-unavailable .ic311-divider,
+    .ic311-cell.is-top-missing .ic311-top-clip,
+    .ic311-cell.is-top-missing .ic311-divider {
       display: none;
     }
     .ic311-unavailable-msg {
       color: var(--n311-text-dim, #888);
       font-size: 10px;
+      text-align: center;
+      line-height: 1.5;
       pointer-events: none;
     }
+    .ic311-cell.is-loading .ic311-unavailable-msg { opacity: 0.6; }
 
     .ic311-layer {
       position: absolute;
@@ -455,8 +496,431 @@ function injectStyles() {
       display: flex; align-items: center; justify-content: center;
     }
     .ic311-cols-arrow:hover { color: #666; background: rgba(255,255,255,0.03); }
+
+    .ic311-fs-backdrop {
+      position: fixed; inset: 0;
+      background: var(--n311-scrim, rgba(0,0,0,0.8));
+      z-index: 99999;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+      font-family: var(--n311-font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+    }
+    .ic311-fs-panel {
+      width: clamp(700px, 90vw, 1920px);
+      height: clamp(480px, 88vh, 1200px);
+      max-width: 100%;
+      max-height: 100%;
+      background: var(--n311-bg-modal, #181818);
+      border: 1px solid var(--n311-border, #333);
+      border-radius: 12px;
+      box-shadow: var(--n311-shadow-modal, 0 24px 80px rgba(0,0,0,0.8));
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      position: relative;
+      box-sizing: border-box;
+    }
+    .ic311-fs-meta {
+      position: absolute; top: 10px; left: 12px; z-index: 5;
+      background: rgba(0,0,0,0.55); color: #e0e0e0;
+      font-size: 12px; font-weight: bold;
+      padding: 4px 8px; border-radius: 4px;
+      border: 1px solid transparent;
+      pointer-events: none;
+      user-select: none;
+    }
+    /* CDS icon button + §2.14 success flash (same triplet as Apply / Grid Composer). */
+    .ic311-fs-copy {
+      appearance: none;
+      position: absolute; top: 10px; right: 12px; z-index: 5;
+      width: 28px; height: 28px;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0; margin: 0;
+      background: var(--n311-bg-elev, #252525);
+      color: var(--n311-text-muted, #aaa);
+      border: 1px solid var(--n311-border-strong, #444);
+      border-radius: 4px;
+      cursor: pointer;
+      line-height: 1;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    .ic311-fs-copy:hover {
+      background: var(--n311-bg-btn-hover, #333);
+      border-color: #666;
+      color: #ccc;
+    }
+    @keyframes ic311-action-ok-flash {
+      0%   { color: #44cc88; border-color: #44cc88; background: #1a3a28; }
+      100% { color: #aaa; border-color: #444; background: #252525; }
+    }
+    .ic311-fs-copy.ic311-action-ok {
+      animation: ic311-action-ok-flash 0.6s ease-out forwards;
+    }
+    .ic311-fs-stage {
+      flex: 1; min-height: 0;
+      position: relative;
+      width: 100%;
+      border: none;
+      border-radius: 0;
+      background: var(--n311-bg-deep, #111);
+      opacity: 1;
+      pointer-events: auto;
+      cursor: ew-resize;
+      user-select: none;
+      overflow: hidden;
+      transform: translate3d(0, 0, 0);
+      backface-visibility: hidden;
+    }
+    .ic311-fs-stage .ic311-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: transparent;
+      pointer-events: none;
+      display: block;
+    }
+    .ic311-fs-stage .ic311-top-clip {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 100%;
+      overflow: hidden;
+      pointer-events: none;
+      will-change: width;
+    }
+    .ic311-fs-stage .ic311-top-clip .ic311-layer {
+      position: absolute;
+      left: 0; top: 0;
+      width: var(--ic311-full-w, 100%);
+      height: 100%;
+      max-width: none;
+    }
+    .ic311-fs-stage .ic311-divider {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 0;
+      left: 100%;
+      border-left: 1px solid rgba(255,255,255,0.95);
+      mix-blend-mode: difference;
+      pointer-events: none;
+      z-index: 2;
+      will-change: left;
+    }
+    .ic311-fs-stage .ic311-view-label {
+      position: absolute; top: 10px; right: 48px;
+      background: rgba(0,0,0,0.55); color: #e0e0e0;
+      font-size: 12px; font-weight: bold;
+      padding: 4px 8px; border-radius: 4px;
+      pointer-events: none; z-index: 3;
+    }
+    .ic311-fs-stage.is-unavailable {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: default;
+    }
+    .ic311-fs-stage.is-unavailable .ic311-layer,
+    .ic311-fs-stage.is-unavailable .ic311-top-clip,
+    .ic311-fs-stage.is-unavailable .ic311-divider,
+    .ic311-fs-stage.is-top-missing .ic311-top-clip,
+    .ic311-fs-stage.is-top-missing .ic311-divider {
+      display: none;
+    }
   `;
   document.head.appendChild(style);
+}
+
+/** Singleton fullscreen overlay state. */
+let _fs = null;
+
+function flashActionOk(el) {
+  if (!el) return;
+  el.classList.remove("ic311-action-ok");
+  void el.offsetWidth;
+  el.classList.add("ic311-action-ok");
+  clearTimeout(el._okFlashTimer);
+  el._okFlashTimer = setTimeout(() => el.classList.remove("ic311-action-ok"), 650);
+}
+
+function closeFullscreen() {
+  if (!_fs) return;
+  _fs.abort?.abort();
+  _fs.stage?._ic311Abort?.abort();
+  _fs.backdrop?.remove();
+  _fs = null;
+}
+
+function visibleFsImage(stage) {
+  if (!stage) return null;
+  const ratio = stage._ic311Ratio ?? 1;
+  const topImg = stage._ic311TopImg;
+  const base = stage._ic311Base;
+  if (ratio >= 0.5) {
+    if (topImg?.naturalWidth > 0) return topImg;
+    if (base?.naturalWidth > 0) return base;
+  } else if (base?.naturalWidth > 0) {
+    return base;
+  } else if (topImg?.naturalWidth > 0) {
+    return topImg;
+  }
+  return null;
+}
+
+async function copyImgToClipboard(img) {
+  if (!img?.naturalWidth || !img.naturalHeight) return false;
+  if (!navigator.clipboard?.write || !window.ClipboardItem) return false;
+  const c = document.createElement("canvas");
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  c.getContext("2d").drawImage(img, 0, 0);
+  const png = await new Promise((resolve, reject) => {
+    c.toBlob((b) => (b ? resolve(b) : reject(new Error("PNG encode failed"))), "image/png");
+  });
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({ "image/png": Promise.resolve(png) }),
+    ]);
+    return true;
+  } catch {
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+    return true;
+  }
+}
+
+async function copyFsVisible() {
+  if (!_fs?.stage) return;
+  const img = visibleFsImage(_fs.stage);
+  if (!img) return;
+  try {
+    const ok = await copyImgToClipboard(img);
+    if (ok) flashActionOk(_fs.copyBtn);
+  } catch (err) {
+    console.warn("[Image Comparer 311] clipboard copy failed", err);
+  }
+}
+
+function makeFsCopyButton() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "ic311-fs-copy";
+  btn.title = "Copy visible image (Ctrl+C)";
+  btn.setAttribute("aria-label", "Copy visible image");
+  btn.innerHTML = SVG_COPY;
+  btn.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  });
+  btn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    copyFsVisible();
+  });
+  return btn;
+}
+
+function tryHydrateFromGrid(node, pair, base, topImg) {
+  const cell = node?._ic311?.grid?.querySelector?.(`.ic311-cell[data-index="${pair.index}"]`);
+  if (!cell?.classList?.contains("is-ready") || cell.classList.contains("is-unavailable")) {
+    return false;
+  }
+  const gBase = cell._ic311Base;
+  const gTop = cell._ic311TopImg;
+  let ok = false;
+  if (gBase?.src && gBase.naturalWidth > 0) {
+    base.src = gBase.currentSrc || gBase.src;
+    ok = true;
+  }
+  if (topImg && gTop?.src && gTop.naturalWidth > 0) {
+    topImg.src = gTop.currentSrc || gTop.src;
+    ok = true;
+  }
+  return ok && base.complete && base.naturalWidth > 0 && (!topImg || (topImg.complete && topImg.naturalWidth > 0));
+}
+
+function buildFsStage(pair) {
+  const stage = document.createElement("div");
+  stage.className = "ic311-fs-stage";
+  stage._ic311Pair = pair;
+  stage._ic311Ratio = 1;
+
+  const hasTop = !!pair.top;
+  const hasBottom = !!pair.bottom;
+
+  const base = document.createElement("img");
+  base.className = "ic311-layer";
+  base.draggable = false;
+  base.alt = "";
+  stage.appendChild(base);
+
+  let topImg = null;
+  if (hasTop && hasBottom) {
+    const clip = document.createElement("div");
+    clip.className = "ic311-top-clip";
+    topImg = document.createElement("img");
+    topImg.className = "ic311-layer";
+    topImg.draggable = false;
+    topImg.alt = "";
+    clip.appendChild(topImg);
+    stage.appendChild(clip);
+
+    const divider = document.createElement("div");
+    divider.className = "ic311-divider";
+    stage.appendChild(divider);
+  } else {
+    stage.style.cursor = "default";
+  }
+
+  const viewLabel = document.createElement("span");
+  viewLabel.className = "ic311-view-label";
+  viewLabel.textContent = hasTop ? "Top" : "Bot";
+  stage.appendChild(viewLabel);
+
+  stage._ic311Base = base;
+  stage._ic311TopImg = topImg;
+  return stage;
+}
+
+async function loadFsStage(stage, node) {
+  const pair = stage._ic311Pair;
+  const base = stage._ic311Base;
+  const topImg = stage._ic311TopImg;
+  stage.querySelector(".ic311-unavailable-msg")?.remove();
+  stage.classList.remove("is-unavailable", "is-top-missing");
+
+  let hydrated = tryHydrateFromGrid(node, pair, base, topImg);
+  if (!hydrated) {
+    const baseOk = await assignImageSrc(base, pair.bottom || pair.top);
+    let topOk = false;
+    if (topImg) topOk = await assignImageSrc(topImg, pair.top);
+    stage.classList.toggle("is-top-missing", !!topImg && !topOk);
+    if (!(baseOk || topOk)) {
+      const msg = document.createElement("span");
+      msg.className = "ic311-unavailable-msg";
+      msg.textContent = "Unavailable";
+      stage.appendChild(msg);
+      stage.classList.add("is-unavailable");
+      stage.style.cursor = "default";
+      return;
+    }
+  } else if (topImg && !(topImg.naturalWidth > 0)) {
+    stage.classList.add("is-top-missing");
+  }
+
+  bindCellMode(stage, normalizeMode(node?.properties?.ic311_mode));
+  requestAnimationFrame(() => {
+    if (_fs?.stage !== stage) return;
+    stage._cachedRect = stage.getBoundingClientRect();
+    syncClipWidth(stage);
+  });
+}
+
+function showFsPair(index) {
+  if (!_fs) return;
+  const pairs = _fs.pairs;
+  if (!pairs.length) {
+    closeFullscreen();
+    return;
+  }
+  const idx = ((index % pairs.length) + pairs.length) % pairs.length;
+  _fs.index = idx;
+  _fs.meta.textContent = `${idx + 1} / ${pairs.length}`;
+
+  _fs.stage?._ic311Abort?.abort();
+  const stage = buildFsStage(pairs[idx]);
+  _fs.panel.replaceChildren(_fs.meta, _fs.copyBtn, stage);
+  _fs.stage = stage;
+  loadFsStage(stage, _fs.node);
+}
+
+function openFullscreen(node, index) {
+  const pairs = buildPairs(node._ic311Top, node._ic311Bottom);
+  if (!pairs.length) return;
+
+  closeFullscreen();
+  injectStyles();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "ic311-fs-backdrop";
+
+  const panel = document.createElement("div");
+  panel.className = "ic311-fs-panel";
+
+  const meta = document.createElement("div");
+  meta.className = "ic311-fs-meta";
+
+  const copyBtn = makeFsCopyButton();
+
+  panel.append(meta, copyBtn);
+  backdrop.appendChild(panel);
+  document.body.appendChild(backdrop);
+
+  const abort = new AbortController();
+  const opts = { signal: abort.signal, capture: true };
+
+  backdrop.addEventListener(
+    "pointerdown",
+    (ev) => {
+      if (ev.target === backdrop) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeFullscreen();
+      }
+    },
+    { signal: abort.signal }
+  );
+  panel.addEventListener(
+    "pointerdown",
+    (ev) => {
+      ev.stopPropagation();
+    },
+    { signal: abort.signal }
+  );
+
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (!_fs) return;
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeFullscreen();
+        return;
+      }
+      if (ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        showFsPair(_fs.index - 1);
+        return;
+      }
+      if (ev.key === "ArrowRight") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        showFsPair(_fs.index + 1);
+        return;
+      }
+      if ((ev.ctrlKey || ev.metaKey) && (ev.key === "c" || ev.key === "C") && !ev.altKey && !ev.shiftKey) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        copyFsVisible();
+      }
+    },
+    opts
+  );
+
+  _fs = { backdrop, panel, meta, copyBtn, stage: null, node, index: 0, pairs, abort };
+  showFsPair(index);
+}
+
+function syncFullscreenForNode(node) {
+  if (!_fs || _fs.node !== node) return;
+  const pairs = buildPairs(node._ic311Top, node._ic311Bottom);
+  if (!pairs.length) {
+    closeFullscreen();
+    return;
+  }
+  _fs.pairs = pairs;
+  showFsPair(Math.min(_fs.index, pairs.length - 1));
 }
 
 /** Pair top[i] with bottom[i]; length-1 side broadcasts. */
@@ -554,7 +1018,7 @@ function bindCellMode(cell, mode) {
   cell._ic311Down = false;
   cell._ic311Mode = mode;
 
-  const hasWipe = !!cell.querySelector(".ic311-top-clip");
+  const hasWipe = !!cell.querySelector(".ic311-top-clip") && !cell.classList.contains("is-top-missing");
   if (!hasWipe) {
     cell.style.cursor = "default";
     return;
@@ -574,6 +1038,18 @@ function bindCellMode(cell, mode) {
         if (ev.target?.closest?.(".ic311-drag-handle")) return;
         ev.preventDefault();
         ev.stopPropagation();
+        // preventDefault on pointerdown kills the native dblclick event;
+        // open fullscreen here on the second press (grid cells only).
+        if (ev.detail >= 2) {
+          cell._ic311Down = false;
+          setClip(cell, 1);
+          if (!cell.classList.contains("ic311-fs-stage")) {
+            const n = cell._ic311Node;
+            const idx = cell._ic311Pair?.index;
+            if (n != null && Number.isInteger(idx)) openFullscreen(n, idx);
+          }
+          return;
+        }
         cell._ic311Down = true;
         setClip(cell, 0);
       },
@@ -713,6 +1189,10 @@ function applyMode(node) {
     bindCellMode(cell, mode);
     bindDragHandle(cell, node);
   }
+  if (_fs?.node === node && _fs.stage) {
+    bindCellMode(_fs.stage, mode);
+    syncClipWidth(_fs.stage);
+  }
 }
 
 function applyColumns(node) {
@@ -731,7 +1211,7 @@ function applyColumns(node) {
   });
 }
 
-function buildCell(pair) {
+function buildCell(pair, node) {
   const cell = document.createElement("div");
   cell.className = "ic311-cell";
   cell.dataset.index = String(pair.index);
@@ -740,7 +1220,6 @@ function buildCell(pair) {
 
   const hasTop = !!pair.top;
   const hasBottom = !!pair.bottom;
-  if (hasTop) cell.classList.add("has-top");
 
   // Base layer = bottom (underneath). Fall back to top when only one side.
   const base = document.createElement("img");
@@ -750,9 +1229,8 @@ function buildCell(pair) {
   cell.appendChild(base);
 
   let topImg = null;
-  let clip = null;
   if (hasTop && hasBottom) {
-    clip = document.createElement("div");
+    const clip = document.createElement("div");
     clip.className = "ic311-top-clip";
     topImg = document.createElement("img");
     topImg.className = "ic311-layer";
@@ -782,39 +1260,71 @@ function buildCell(pair) {
 
   cell.appendChild(makeDragHandle());
 
+  cell._ic311Base = base;
+  cell._ic311TopImg = topImg;
+  cell._ic311Node = node;
+
+  cell.addEventListener("dblclick", (ev) => {
+    if (ev.target?.closest?.(".ic311-drag-handle")) return;
+    if (!cell.classList.contains("is-ready")) return;
+    if (cell.classList.contains("is-unavailable")) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    openFullscreen(node, pair.index);
+  });
+
   // Reveal only when images are ready at the final aspect ratio (no black square flash).
   // Retry + concurrency limit avoids intermittent broken /view loads on fresh temp PNGs.
-  cell._ic311Ready = (async () => {
-    const baseData = hasBottom ? pair.bottom : pair.top;
-    const baseOk = await assignImageSrc(base, baseData);
-    let topOk = true;
-    if (topImg) {
-      topOk = await assignImageSrc(topImg, pair.top);
-      if (!topOk) {
-        // Keep bottom visible instead of browser broken-image chrome over the wipe.
-        clip?.remove();
-        cell.querySelector(".ic311-divider")?.remove();
-        topImg = null;
-        cell.style.cursor = "default";
-      }
-    }
-
-    const ref = topImg && topImg.naturalWidth > 0 ? topImg : base;
-    if ((baseOk || topOk) && ref.naturalWidth > 0 && ref.naturalHeight > 0) {
-      cell.style.aspectRatio = `${ref.naturalWidth} / ${ref.naturalHeight}`;
-      cell.classList.add("is-ready");
-      syncClipWidth(cell);
-      return;
-    }
-
-    const msg = document.createElement("span");
-    msg.className = "ic311-unavailable-msg";
-    msg.textContent = "Unavailable";
-    cell.appendChild(msg);
-    cell.classList.add("is-ready", "is-unavailable");
-  })();
+  cell._ic311Ready = loadCellImages(cell, node);
 
   return cell;
+}
+
+/** Load both layers, then either reveal the cell or offer a manual retry. */
+async function loadCellImages(cell, node) {
+  if (cell._ic311Loading) return;
+  cell._ic311Loading = true;
+
+  const pair = cell._ic311Pair;
+  const base = cell._ic311Base;
+  const topImg = cell._ic311TopImg;
+  cell.querySelector(".ic311-unavailable-msg")?.remove();
+  cell.classList.remove("is-unavailable");
+
+  const baseOk = await assignImageSrc(base, pair.bottom || pair.top);
+  let topOk = false;
+  if (topImg) topOk = await assignImageSrc(topImg, pair.top);
+
+  cell._ic311Loading = false;
+
+  // Keep the bottom usable on its own when only the top layer failed.
+  cell.classList.toggle("is-top-missing", !!topImg && !topOk);
+  cell.classList.toggle("has-top", topImg ? topOk : baseOk && !pair.bottom);
+
+  const ref = topOk ? topImg : base;
+  if (ref.naturalWidth > 0 && ref.naturalHeight > 0) {
+    cell.style.aspectRatio = `${ref.naturalWidth} / ${ref.naturalHeight}`;
+    cell.classList.add("is-ready");
+    bindCellMode(cell, normalizeMode(node?.properties?.ic311_mode));
+    bindDragHandle(cell, node);
+    syncClipWidth(cell);
+    return;
+  }
+
+  const msg = document.createElement("span");
+  msg.className = "ic311-unavailable-msg";
+  msg.textContent = "Unavailable\nclick to retry";
+  msg.style.whiteSpace = "pre-line";
+  cell.appendChild(msg);
+  cell.classList.add("is-ready", "is-unavailable");
+  cell.addEventListener(
+    "click",
+    () => {
+      cell.classList.add("is-loading");
+      loadCellImages(cell, node).finally(() => cell.classList.remove("is-loading"));
+    },
+    { once: true }
+  );
 }
 
 function pairsSignature(pairs) {
@@ -848,13 +1358,14 @@ function renderGrid(node) {
     empty.className = "ic311-empty";
     empty.textContent = "Connect image_top and/or image_bottom, then queue.";
     ui.content.replaceChildren(empty);
+    syncFullscreenForNode(node);
     return;
   }
 
   ui.content.replaceChildren(ui.grid);
   const cells = [];
   for (const pair of pairs) {
-    const cell = buildCell(pair);
+    const cell = buildCell(pair, node);
     cells.push(cell);
     ui.grid.appendChild(cell);
     bindCellMode(cell, mode);
@@ -867,6 +1378,8 @@ function renderGrid(node) {
     if (ui._renderGen !== renderGen) return;
     for (const cell of cells) syncClipWidth(cell);
   });
+
+  syncFullscreenForNode(node);
 }
 
 function applyOverlays(node) {
@@ -905,6 +1418,9 @@ function buildWidget(node) {
   if (node.properties.ic311_columns == null) node.properties.ic311_columns = 4;
   if (node.properties.ic311_show_overlays == null) node.properties.ic311_show_overlays = true;
   node.properties.ic311_columns = clampColumns(node.properties.ic311_columns);
+  if (!Array.isArray(node.properties.ic311_top_images)) node.properties.ic311_top_images = [];
+  if (!Array.isArray(node.properties.ic311_bottom_images)) node.properties.ic311_bottom_images = [];
+  restoreImages(node);
 
   const root = document.createElement("div");
   root.className = "ic311-root";
@@ -1080,6 +1596,7 @@ app.registerExtension({
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name !== NODE_NAME) return;
+    nodeType.canvasOnly = true;
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
@@ -1125,17 +1642,20 @@ app.registerExtension({
     const onExecuted = nodeType.prototype.onExecuted;
     nodeType.prototype.onExecuted = function (output) {
       if (onExecuted) onExecuted.apply(this, arguments);
-      this._ic311Top = output?.top_images || [];
-      this._ic311Bottom = output?.bottom_images || [];
+      this._ic311Top = normalizeImageRefs(output?.top_images);
+      this._ic311Bottom = normalizeImageRefs(output?.bottom_images);
+      persistImages(this);
       clearNodeImagePreview(this);
       renderGrid(this);
       syncToolbar(this);
+      app.graph?.setDirtyCanvas?.(true);
     };
 
     const onConfigure = nodeType.prototype.onConfigure;
     nodeType.prototype.onConfigure = function () {
       const r = onConfigure?.apply(this, arguments);
       clearNodeImagePreview(this);
+      restoreImages(this);
       if (this._ic311) {
         syncToolbar(this);
         renderGrid(this);
@@ -1145,6 +1665,7 @@ app.registerExtension({
 
     const onDestroy = nodeType.prototype.onDestroy;
     nodeType.prototype.onDestroy = function () {
+      if (_fs?.node === this) closeFullscreen();
       if (this._ic311ResizeObserver) {
         this._ic311ResizeObserver.disconnect();
       }

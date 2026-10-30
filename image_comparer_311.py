@@ -7,6 +7,10 @@ picking a single pair from the batch.
 
 image_top is the new image overlaid on image_bottom (the base).
 
+Previews save to temp only (same as other Comfy preview nodes). The frontend
+keeps refs in node.properties so tab switches can restore the grid while
+those temp files still exist.
+
 Part of the 311 Tool Suite (V3 API).
 """
 
@@ -43,7 +47,8 @@ class ImageComparer311(io.ComfyNode):
                 "Compare two image batches with Slide / Click wipe. "
                 "image_top is the overlay on image_bottom (base). "
                 "With Overlay on, a 9-dot handle drags image_top to other nodes. "
-                "Length-1 inputs broadcast."
+                "Length-1 inputs broadcast. "
+                "Previews stay in temp; workflow refs restore the grid across tabs."
             ),
             search_aliases=[
                 "image comparer", "compare", "slider", "before after",

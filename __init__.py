@@ -7,12 +7,18 @@ Nodes:
   - Multiline 311: Multiline text with comment stripping
   - Image Batch 311: Smart image batching with auto-resize
   - Join String 311: Join strings with separator
+  - String Split 311: Split a string once by delimiter
+  - String To Int 311: Convert string to integer
+  - Extract String 311: Extract text between delimiters + coerce types
   - File Reader 311: Read text files with viewer
   - SAM3 Images 311: All-in-one SAM3 segmentation with preview + mask arithmetic
   - Preview 311: Draggable image preview with drag-and-drop support
   - Any Switch 311: Any-type index switch with clickable input button menu
   - Preview Bridge 311: Image preview bridge with Clipspace mask editing
   - Image Comparer 311: Batch L/R image comparison grid (all pairs at once) with drag-out
+  - Image From Batch 311: Extract a slice from an image batch
+  - Mask Fix 311: Morphological mask cleanup
+  - Mask Preview 311: Preview MASK as grayscale
 """
 
 from typing_extensions import override
@@ -21,6 +27,9 @@ from comfy_api.latest import ComfyExtension, io
 from .nodes import Multiline311
 from .image_batch_311 import ImageBatch311
 from .join_string_311 import JoinString311
+from .string_split_311 import StringSplit311
+from .string_to_int_311 import StringToInt311
+from .extract_string_311 import ExtractString311
 from .file_reader_311 import FileReader311, FileReaderNode
 from .sam3_images_311 import SAM3Images311
 from .any_switch_311 import AnySwitch311
@@ -28,6 +37,9 @@ from .any_switch_311 import AnySwitch311
 from .preview_311 import Preview311
 from .preview_bridge_311 import PreviewBridge311
 from .image_comparer_311 import ImageComparer311
+from .image_from_batch_311 import ImageFromBatch311
+from .mask_fix_311 import MaskFix311
+from .mask_preview_311 import MaskPreview311
 
 
 class ToolSuite311Extension(ComfyExtension):
@@ -37,6 +49,9 @@ class ToolSuite311Extension(ComfyExtension):
             Multiline311,
             ImageBatch311,
             JoinString311,
+            StringSplit311,
+            StringToInt311,
+            ExtractString311,
             FileReader311,
             FileReaderNode,
             SAM3Images311,
@@ -44,6 +59,9 @@ class ToolSuite311Extension(ComfyExtension):
             Preview311,
             PreviewBridge311,
             ImageComparer311,
+            ImageFromBatch311,
+            MaskFix311,
+            MaskPreview311,
         ]
 
 

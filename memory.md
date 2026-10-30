@@ -11,6 +11,13 @@ Este documento registra los aprendizajes específicos de este repositorio de nod
 * **Fix node (recreate):** Set/Get keep the Constant, re-enable `n311AutoTitle`, and retitle to `⚡ {Constant}`. Virtual nodes do not get Manager's recreate hook (`beforeRegisterNodeDef`), so we own that menu item.
 * **Get Rename:** button under Constant opens `canvas.prompt`. Confirmed name is written to every Set/Get in the current graph (and nested subgraphs) that shared the old Constant. Aborts if another Set already owns the new name. Prompt is `position:fixed` and must be placed in viewport coords above the Rename widget — without that it lands at `canvas.width/2` (bottom-right, clipped). Rename re-enables `n311AutoTitle` and retitles every touched node to `⚡ {name}` (legacy graphs have the flag off, so onRename would otherwise write a title without the mark).
 
+## Utility ports (2026-10-30)
+* Six V3 ports so graphs drop comfyui-various / lf-nodes / ComfyUI_essentials: `StringSplit311` (JWStringSplit), `StringToInt311` (JWStringToInteger), `ExtractString311` (LF_ExtractString), `ImageFromBatch311` (ImageFromBatch+), `MaskFix311` (MaskFix+), `MaskPreview311` (MaskPreview+). Category `311 Tool Suite`, display names end with ` 311`.
+* Behaviour differences vs the originals: String Split with an empty delimiter returns `(source, "")` instead of raising; String To Int strips whitespace, accepts `"3.9"` → 3, and raises a clear error otherwise; Mask Fix accepts an unbatched `[H, W]` mask and clamps output to 0–1 (gaussian blur overshoots to 1.0000002).
+* Extract String outputs `None` on INT/FLOAT/BOOLEAN when the text does not coerce (same as LF).
+* Mask Preview recreates the temp dir before saving (shared temp can be rmtree'd by another instance).
+* Test: `python_embeded\python.exe ComfyUI\custom_nodes\ComfyUI-311-Tool-Suite\test_new_nodes_311.py` (no server; previews go to a throwaway temp dir).
+
 ## CDS (ComfyUI Design System)
 
 - **Local hub:** [`.cds/README.md`](.cds/README.md) (junction -> `docs/CDS`)
